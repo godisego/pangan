@@ -1,0 +1,33 @@
+# Environment
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+
+# macOS / editor
+.DS_Store
+.idea/
+.vscode/
+.claude/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+coverage/
+
+# Build artifacts
+dist/
+build/
+*.tsbuildinfo
+
+# Local app config
+config.json
