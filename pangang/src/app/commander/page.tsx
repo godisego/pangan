@@ -1,187 +1,221 @@
 'use client';
 
-import Link from 'next/link';
+import AppShell from '@/components/AppShell';
 import { useFetch } from '@/hooks/useFetch';
 import { commanderApi } from '@/lib/api';
 import type { CommanderLogic, CommanderOrder, CommanderStock } from '@/types/api';
 
-function SectionCard({
+function CompactPanel({
   title,
-  subtitle,
-  children
+  badge,
+  children,
 }: {
   title: string;
-  subtitle?: string;
+  badge?: string;
   children: React.ReactNode;
 }) {
   return (
-    <section className="card space-y-3">
-      <div>
-        <h2 className="text-lg font-semibold text-[var(--text-primary)]">{title}</h2>
-        {subtitle ? <p className="text-sm text-[var(--text-secondary)] mt-1">{subtitle}</p> : null}
+    <section className="surface-panel animate-stage p-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="text-lg font-semibold tracking-[-0.03em] text-[var(--text-primary)]">{title}</div>
+        {badge ? <div className="metric-chip"><strong>{badge}</strong></div> : null}
       </div>
-      {children}
+      <div className="mt-4">{children}</div>
     </section>
   );
 }
 
-function LogicCard({ label, logic }: { label: string; logic: CommanderLogic }) {
+function Metric({
+  label,
+  value,
+  detail,
+}: {
+  label: string;
+  value: string;
+  detail: string;
+}) {
   return (
-    <div className="rounded-xl border border-[var(--border-color)] bg-[var(--bg-secondary)] p-4 space-y-2">
-      <div className="flex items-center justify-between gap-3">
-        <span className="text-sm font-medium text-[var(--accent-green)]">{label}</span>
-        <span className="text-xs text-[var(--text-secondary)]">有效期：{logic.validity}</span>
+    <div className="data-tile">
+      <div className="text-[11px] uppercase tracking-[0.18em] text-[var(--text-muted)]">{label}</div>
+      <div className="mt-2 text-lg font-semibold tracking-[-0.03em] text-[var(--text-primary)]">{value}</div>
+      <div className="mt-1 text-xs leading-6 text-[var(--text-secondary)]">{detail}</div>
+    </div>
+  );
+}
+
+function LogicCard({
+  label,
+  logic,
+  tone,
+}: {
+  label: string;
+  logic: CommanderLogic;
+  tone: 'attack' | 'defense';
+}) {
+  const accentClass = tone === 'attack' ? 'text-[var(--accent-green)]' : 'text-[var(--accent-gold)]';
+  const badgeClass = tone === 'attack' ? 'bg-[var(--accent-green-dim)] text-[var(--accent-green)]' : 'bg-[var(--accent-gold-dim)] text-[var(--accent-gold)]';
+
+  return (
+    <div className="rounded-[24px] border border-[var(--border-color)] bg-[rgba(255,255,255,0.02)] p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className={`rounded-full px-2.5 py-1 text-xs font-medium ${badgeClass}`}>{label}</div>
+        <div className="text-xs text-[var(--text-secondary)]">有效期 {logic.validity}</div>
       </div>
-      <div className="text-base font-semibold text-[var(--text-primary)]">{logic.name}</div>
-      <p className="text-sm text-[var(--text-secondary)] leading-relaxed">{logic.reason}</p>
-      {logic.us_mapping ? <p className="text-xs text-[var(--text-secondary)]">{logic.us_mapping}</p> : null}
-      <div className="rounded-lg bg-[var(--bg-primary)] px-3 py-2 text-sm text-[var(--text-primary)]">
-        <strong>验证点：</strong>{logic.verify_point}
-      </div>
-      <div className="rounded-lg bg-red-500/10 px-3 py-2 text-sm text-red-300">
-        <strong>证伪信号：</strong>{logic.fake_signal}
+
+      <div className={`mt-3 text-xl font-semibold tracking-[-0.03em] ${accentClass}`}>{logic.name}</div>
+      <div className="mt-2 text-sm leading-7 text-[var(--text-secondary)]">{logic.reason}</div>
+
+      <div className="mt-4 grid gap-3">
+        <div className="rounded-[18px] border border-[var(--border-color)] bg-[rgba(8,20,30,0.76)] px-4 py-3">
+          <div className="text-[11px] uppercase tracking-[0.18em] text-[var(--text-muted)]">验证点</div>
+          <div className="mt-1 text-sm leading-7 text-[var(--text-secondary)]">{logic.verify_point}</div>
+        </div>
+        <div className="rounded-[18px] border border-[rgba(255,123,136,0.22)] bg-[var(--accent-red-dim)] px-4 py-3">
+          <div className="text-[11px] uppercase tracking-[0.18em] text-[var(--text-muted)]">证伪信号</div>
+          <div className="mt-1 text-sm leading-7 text-[var(--text-secondary)]">{logic.fake_signal}</div>
+        </div>
       </div>
     </div>
   );
 }
 
-function StockTable({ title, stocks }: { title: string; stocks: CommanderStock[] }) {
+function StockRows({
+  title,
+  stocks,
+  tone,
+}: {
+  title: string;
+  stocks: CommanderStock[];
+  tone: 'attack' | 'defense';
+}) {
+  const accentClass = tone === 'attack' ? 'text-[var(--accent-green)]' : 'text-[var(--accent-gold)]';
+
   return (
-    <div className="space-y-3">
-      <h3 className="text-sm font-medium text-[var(--text-primary)]">{title}</h3>
-      <div className="overflow-hidden rounded-xl border border-[var(--border-color)]">
-        <table className="w-full text-sm">
-          <thead className="bg-[var(--bg-secondary)] text-[var(--text-secondary)]">
-            <tr>
-              <th className="px-3 py-2 text-left">优先级</th>
-              <th className="px-3 py-2 text-left">股票</th>
-              <th className="px-3 py-2 text-left">竞价预期</th>
-              <th className="px-3 py-2 text-left">竞价状态</th>
-              <th className="px-3 py-2 text-left">战术</th>
-            </tr>
-          </thead>
-          <tbody>
-            {stocks.map((stock) => (
-              <tr key={`${title}-${stock.code}`} className="border-t border-[var(--border-color)] text-[var(--text-primary)]">
-                <td className="px-3 py-3">{stock.priority}</td>
-                <td className="px-3 py-3">
-                  <div>{stock.stock}</div>
-                  <div className="text-xs text-[var(--text-secondary)]">{stock.code}</div>
-                </td>
-                <td className="px-3 py-3">{stock.auction_price}</td>
-                <td className="px-3 py-3">{stock.auction_status}</td>
-                <td className="px-3 py-3 text-[var(--text-secondary)]">{stock.tactic}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+    <div className="rounded-[24px] border border-[var(--border-color)] bg-[rgba(255,255,255,0.02)] p-4">
+      <div className="text-sm font-semibold text-[var(--text-primary)]">{title}</div>
+      <div className="mt-4 space-y-3">
+        {stocks.map((stock) => (
+          <div key={`${title}-${stock.code}`} className="rounded-[18px] border border-[var(--border-color)] bg-[rgba(8,20,30,0.78)] px-4 py-3">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="truncate text-sm font-semibold text-[var(--text-primary)]">
+                  <span className={`mr-2 ${accentClass}`}>{stock.priority}</span>
+                  {stock.stock}
+                </div>
+                <div className="mt-1 text-xs text-[var(--text-muted)]">{stock.code} · {stock.auction_status}</div>
+              </div>
+              <div className={`shrink-0 text-xs font-medium ${accentClass}`}>{stock.auction_price}</div>
+            </div>
+            <div className="mt-2 text-sm leading-6 text-[var(--text-secondary)]">{stock.tactic}</div>
+          </div>
+        ))}
       </div>
     </div>
   );
 }
 
 export default function CommanderPage() {
-  const { data, loading, error, refetch } = useFetch<CommanderOrder>(
+  const { data, loading, error, refetch, isRefreshing } = useFetch<CommanderOrder>(
     () => commanderApi.getOrder(),
-    { interval: 60000 }
+    { interval: 60000, cacheKey: 'pangang_cache_commander_order_v1' }
   );
 
   return (
-    <div className="min-h-screen bg-[var(--bg-primary)] text-[var(--text-primary)]">
-      <header className="sticky top-0 z-50 border-b border-[var(--border-color)] bg-[var(--bg-primary)]/80 backdrop-blur-lg">
-        <div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-3">
-          <div className="space-y-1">
-            <Link href="/" className="text-sm text-[var(--text-secondary)] hover:text-[var(--text-primary)]">← 返回总控台</Link>
-            <h1 className="text-xl font-semibold">开盘作战室</h1>
+    <AppShell
+      title="作战室"
+      subtitle="只保留执行要点：天气、主线、股票池和时间窗军令。"
+      badge="Execution Deck"
+      maxWidthClassName="max-w-6xl"
+      actions={(
+        <button onClick={() => void refetch()} className="btn btn-secondary px-4 py-2 text-sm">
+          {isRefreshing ? '更新中...' : '刷新'}
+        </button>
+      )}
+    >
+      {loading ? (
+        <section className="surface-panel animate-stage p-5">
+          <div className="flex min-h-[180px] items-center justify-center text-sm text-[var(--text-secondary)]">
+            正在生成作战计划...
           </div>
-          <button
-            onClick={() => refetch()}
-            className="rounded-full border border-[var(--border-color)] px-4 py-2 text-sm text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
-          >
-            刷新指令
-          </button>
-        </div>
-      </header>
+        </section>
+      ) : null}
 
-      <main className="mx-auto max-w-5xl px-4 py-6 space-y-6">
-        {loading ? (
-          <section className="card text-sm text-[var(--text-secondary)]">正在生成今日作战指令...</section>
-        ) : null}
+      {!loading && error && !data ? (
+        <section className="surface-panel animate-stage border-[rgba(255,123,136,0.24)] p-5">
+          <div className="text-lg font-semibold text-[var(--text-primary)]">作战计划暂时不可用</div>
+          <div className="mt-2 text-sm leading-7 text-[var(--text-secondary)]">{error.message}</div>
+        </section>
+      ) : null}
 
-        {error ? (
-          <section className="card border border-red-500/30 bg-red-500/5 text-sm text-red-300">
-            作战指令加载失败：{error.message}
-          </section>
-        ) : null}
-
-        {data ? (
-          <>
-            <SectionCard
-              title={`${data.battle_weather.icon} 战场天气`}
-              subtitle={`生成时间：${new Date(data.timestamp).toLocaleString('zh-CN')}`}
-            >
-              <div className="grid gap-4 md:grid-cols-3">
-                <div className="rounded-xl bg-[var(--bg-secondary)] p-4">
-                  <div className="text-sm text-[var(--text-secondary)]">竞价情绪</div>
-                  <div className="mt-2 text-2xl font-semibold">{data.battle_weather.weather}</div>
-                  <div className="mt-2 text-sm text-[var(--text-secondary)]">{data.battle_weather.description}</div>
-                </div>
-                <div className="rounded-xl bg-[var(--bg-secondary)] p-4">
-                  <div className="text-sm text-[var(--text-secondary)]">竞价指标</div>
-                  <div className="mt-2 text-sm leading-relaxed">{data.battle_weather.auction_sentiment}</div>
-                </div>
-                <div className="rounded-xl bg-[var(--bg-secondary)] p-4">
-                  <div className="text-sm text-[var(--text-secondary)]">隔夜外盘</div>
-                  <div className="mt-2 text-sm leading-relaxed">{data.battle_weather.overnight_us || '暂无'}</div>
-                </div>
+      {data ? (
+        <div className="grid gap-5">
+          <CompactPanel title="当前作战状态" badge={`${data.battle_weather.icon} ${data.battle_weather.weather}`}>
+            <div className="rounded-[26px] border border-[rgba(246,199,125,0.18)] bg-[linear-gradient(135deg,rgba(246,199,125,0.12),rgba(141,220,255,0.08))] p-5">
+              <div className="text-[11px] uppercase tracking-[0.18em] text-[var(--text-muted)]">现在做什么</div>
+              <div className="mt-3 text-2xl font-semibold tracking-[-0.04em] text-[var(--text-primary)]">
+                {data.context.action_now || data.commander_tips.action_now || '等待下一条军令'}
               </div>
-            </SectionCard>
+              <div className="mt-3 text-sm leading-7 text-[var(--text-secondary)]">{data.commander_tips.focus}</div>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <span className="metric-chip"><strong>{data.context.label}</strong></span>
+                <span className="metric-chip"><strong>市场时钟 {data.context.market_clock}</strong></span>
+                <span className="metric-chip"><strong>{data.commander_tips.position_text}</strong></span>
+              </div>
+            </div>
 
-            <SectionCard title="🔄 昨日验证" subtitle={data.yesterday_review.summary}>
-              <div className="flex flex-wrap items-center gap-3">
-                <span className="rounded-full bg-[var(--bg-secondary)] px-3 py-1 text-sm">{data.yesterday_review.status}</span>
-                {data.yesterday_review.accuracy ? (
-                  <span className="rounded-full bg-[var(--accent-green)]/10 px-3 py-1 text-sm text-[var(--accent-green)]">
-                    准确率 {data.yesterday_review.accuracy}
-                  </span>
+            <div className="mt-4 grid gap-3 md:grid-cols-4">
+              <Metric label="天气" value={data.battle_weather.weather} detail={data.battle_weather.auction_sentiment || data.battle_weather.description} />
+              <Metric label="昨日" value={data.yesterday_review.status} detail={data.yesterday_review.summary} />
+              <Metric label="进攻" value={data.today_mainlines.logic_a.name} detail={data.today_mainlines.logic_a.reason} />
+              <Metric label="防守" value={data.today_mainlines.logic_b.name} detail={data.today_mainlines.logic_b.reason} />
+            </div>
+
+            {error ? (
+              <div className="mt-4 rounded-[18px] border border-[rgba(255,123,136,0.22)] bg-[var(--accent-red-dim)] px-4 py-3 text-sm text-[var(--accent-red)]">
+                后台刚刚刷新失败，当前先保留最近一次成功结果。
+              </div>
+            ) : null}
+          </CompactPanel>
+
+          <div className="grid gap-5 xl:grid-cols-2">
+            <CompactPanel title="今日双主线">
+              <div className="grid gap-4">
+                <LogicCard label="逻辑 A / 进攻" logic={data.today_mainlines.logic_a} tone="attack" />
+                <LogicCard label="逻辑 B / 防守" logic={data.today_mainlines.logic_b} tone="defense" />
+              </div>
+            </CompactPanel>
+
+            <CompactPanel title="时间窗军令" badge={data.commander_tips.position_text}>
+              <div className="grid gap-3">
+                {data.commander_tips.time_orders.map((order) => (
+                  <div key={order.time} className="rounded-[18px] border border-[var(--border-color)] bg-[rgba(255,255,255,0.02)] px-4 py-3">
+                    <div className="text-sm font-semibold text-[var(--text-primary)]">{order.time} 前</div>
+                    <div className="mt-1 text-sm leading-7 text-[var(--text-secondary)]">若 {order.condition}</div>
+                    <div className="mt-2 text-sm font-medium text-[var(--accent-green)]">{order.action}</div>
+                  </div>
+                ))}
+
+                {data.commander_tips.risk_flags?.length ? (
+                  <div className="grid gap-3 pt-1">
+                    {data.commander_tips.risk_flags.map((flag) => (
+                      <div key={flag} className="rounded-[18px] border border-[rgba(255,123,136,0.22)] bg-[var(--accent-red-dim)] px-4 py-3 text-sm leading-7 text-[var(--text-secondary)]">
+                        {flag}
+                      </div>
+                    ))}
+                  </div>
                 ) : null}
               </div>
-            </SectionCard>
+            </CompactPanel>
+          </div>
 
-            <SectionCard title="🦋 今日双主线" subtitle={data.today_mainlines.summary}>
-              <div className="grid gap-4 md:grid-cols-2">
-                <LogicCard label="逻辑 A / 进攻" logic={data.today_mainlines.logic_a} />
-                <LogicCard label="逻辑 B / 防守" logic={data.today_mainlines.logic_b} />
-              </div>
-            </SectionCard>
-
-            <SectionCard title="⚔️ 精锐股票池" subtitle="基于当前竞价强弱排序">
-              <div className="space-y-5">
-                <StockTable title="进攻池" stocks={data.elite_stock_pool.attack} />
-                <StockTable title="防守池" stocks={data.elite_stock_pool.defense} />
-              </div>
-            </SectionCard>
-
-            <SectionCard title="📡 指挥官军令" subtitle={data.commander_tips.focus}>
-              <div className="grid gap-4 md:grid-cols-[240px_1fr]">
-                <div className="rounded-xl bg-[var(--bg-secondary)] p-4">
-                  <div className="text-sm text-[var(--text-secondary)]">仓位军令</div>
-                  <div className="mt-2 text-sm leading-7">{data.commander_tips.position_text}</div>
-                </div>
-                <div className="space-y-3">
-                  {data.commander_tips.time_orders.map((order) => (
-                    <div key={order.time} className="rounded-xl border border-[var(--border-color)] bg-[var(--bg-secondary)] p-4">
-                      <div className="text-sm font-medium text-[var(--text-primary)]">{order.time} 前</div>
-                      <div className="mt-2 text-sm text-[var(--text-secondary)]">若 {order.condition}</div>
-                      <div className="mt-2 text-sm text-[var(--accent-green)]">{order.action}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </SectionCard>
-          </>
-        ) : null}
-      </main>
-    </div>
+          <CompactPanel title="精锐股票池">
+            <div className="grid gap-4 xl:grid-cols-2">
+              <StockRows title={`进攻方向 · ${data.today_mainlines.logic_a.name}`} stocks={data.elite_stock_pool.attack} tone="attack" />
+              <StockRows title={`防守方向 · ${data.today_mainlines.logic_b.name}`} stocks={data.elite_stock_pool.defense} tone="defense" />
+            </div>
+          </CompactPanel>
+        </div>
+      ) : null}
+    </AppShell>
   );
 }

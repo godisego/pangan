@@ -3,7 +3,6 @@
 // ============================================
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { ApiError, TimeoutError } from '@/lib/api';
 
 export interface UseFetchOptions<T> {
   interval?: number;
@@ -12,6 +11,7 @@ export interface UseFetchOptions<T> {
   onError?: (error: Error) => void;
   retryOnMount?: boolean;
   staleTime?: number;
+  cacheKey?: string;
 }
 
 export interface UseFetchResult<T> {
@@ -20,6 +20,7 @@ export interface UseFetchResult<T> {
   error: Error | null;
   refetch: () => Promise<void>;
   isStale: boolean;
+  isRefreshing: boolean;
 }
 
 export function useFetch<T>(
@@ -31,45 +32,130 @@ export function useFetch<T>(
     enabled = true,
     onSuccess,
     onError,
-    staleTime = 0
+    staleTime = 0,
+    cacheKey
   } = options;
+
+  const readCachedData = useCallback((): T | null => {
+    if (!cacheKey || typeof window === 'undefined') {
+      return null;
+    }
+
+    try {
+      const raw = window.localStorage.getItem(cacheKey);
+      if (!raw) return null;
+      return JSON.parse(raw) as T;
+    } catch {
+      return null;
+    }
+  }, [cacheKey]);
 
   const [data, setData] = useState<T | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
   const [isStale, setIsStale] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [cacheReady, setCacheReady] = useState(() => !cacheKey);
 
-  const lastFetchTime = useRef<number>(0);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const isMounted = useRef(true);
+  const dataRef = useRef<T | null>(null);
+  const serializedRef = useRef<string | null>(null);
+  const fetchFnRef = useRef(fetchFn);
+  const onSuccessRef = useRef(onSuccess);
+  const onErrorRef = useRef(onError);
 
-  const fetchData = useCallback(async () => {
+  useEffect(() => {
+    fetchFnRef.current = fetchFn;
+    onSuccessRef.current = onSuccess;
+    onErrorRef.current = onError;
+  }, [fetchFn, onSuccess, onError]);
+
+  useEffect(() => {
+    if (!cacheKey) {
+      return;
+    }
+
+    const hydrateTimer = window.setTimeout(() => {
+      const cachedData = readCachedData();
+      if (cachedData !== null) {
+        dataRef.current = cachedData;
+        try {
+          serializedRef.current = JSON.stringify(cachedData);
+        } catch {
+          serializedRef.current = null;
+        }
+        setData(cachedData);
+        setLoading(false);
+      } else {
+        setLoading(true);
+      }
+      setCacheReady(true);
+    }, 0);
+
+    return () => {
+      window.clearTimeout(hydrateTimer);
+    };
+  }, [cacheKey, readCachedData]);
+
+  const fetchData = useCallback(async (background = false) => {
     if (!enabled) return;
 
-    try {
-      setLoading(true);
-      setError(null);
+    const hasData = dataRef.current !== null;
+    const silentRefresh = background && hasData;
 
-      const result = await fetchFn();
+    try {
+      if (silentRefresh) {
+        setIsRefreshing(true);
+      } else {
+        setLoading(true);
+      }
+
+      const result = await fetchFnRef.current();
 
       if (isMounted.current) {
-        setData(result);
+        let shouldUpdate = true;
+        try {
+          const serialized = JSON.stringify(result);
+          if (serializedRef.current === serialized) {
+            shouldUpdate = false;
+          } else {
+            serializedRef.current = serialized;
+          }
+        } catch {
+          shouldUpdate = true;
+        }
+
+        if (shouldUpdate) {
+          dataRef.current = result;
+          setData(result);
+          if (cacheKey && typeof window !== 'undefined') {
+            try {
+              window.localStorage.setItem(cacheKey, JSON.stringify(result));
+            } catch {
+              // Ignore storage write failure and keep runtime state only.
+            }
+          }
+        }
+
         setLoading(false);
-        lastFetchTime.current = Date.now();
+        setIsRefreshing(false);
+        setError(null);
         setIsStale(false);
 
-        if (onSuccess) onSuccess(result);
+        if (onSuccessRef.current) onSuccessRef.current(result);
       }
     } catch (err) {
       if (isMounted.current) {
         const error = err instanceof Error ? err : new Error('Unknown error');
         setError(error);
         setLoading(false);
+        setIsRefreshing(false);
 
-        if (onError) onError(error);
+        if (onErrorRef.current) onErrorRef.current(error);
       }
     }
-  }, [fetchFn, enabled, onSuccess, onError]);
+  }, [enabled, cacheKey]);
 
   // Refetch function
   const refetch = useCallback(async () => {
@@ -78,25 +164,31 @@ export function useFetch<T>(
 
   // Initial fetch and interval setup
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled || !cacheReady) return;
 
-    fetchData();
+    const initialTimer = setTimeout(() => {
+      void fetchData(false);
+    }, 0);
 
     // Set up stale timer
     if (staleTime > 0) {
       const staleTimer = setTimeout(() => {
         setIsStale(true);
       }, staleTime);
-      return () => clearTimeout(staleTimer);
+      return () => {
+        clearTimeout(initialTimer);
+        clearTimeout(staleTimer);
+      };
     }
-  }, [enabled, staleTime]);
+    return () => clearTimeout(initialTimer);
+  }, [enabled, staleTime, fetchData, cacheReady]);
 
   // Interval polling
   useEffect(() => {
-    if (!enabled || !interval) return;
+    if (!enabled || !interval || !cacheReady) return;
 
     intervalRef.current = setInterval(() => {
-      fetchData();
+      fetchData(true);
     }, interval);
 
     return () => {
@@ -104,7 +196,7 @@ export function useFetch<T>(
         clearInterval(intervalRef.current);
       }
     };
-  }, [enabled, interval, fetchData]);
+  }, [enabled, interval, fetchData, cacheReady]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -121,17 +213,18 @@ export function useFetch<T>(
     loading,
     error,
     refetch,
-    isStale
+    isStale,
+    isRefreshing
   };
 }
 
 // Hook for fetching multiple resources in parallel
-export function useFetchParallel<T extends Record<string, any>>(
-  fetchFns: Record<keyof T, () => Promise<any>>,
+export function useFetchParallel<T extends Record<string, unknown>>(
+  fetchFns: Record<keyof T, () => Promise<unknown>>,
   options: UseFetchOptions<T> = {}
 ): UseFetchResult<T> {
   const combinedFetch = useCallback(async () => {
-    const entries = Object.entries(fetchFns) as Array<[string, () => Promise<any>]>;
+    const entries = Object.entries(fetchFns) as Array<[string, () => Promise<unknown>]>;
     const results = await Promise.all(
       entries.map(async ([key, fn]) => [key, await fn()])
     );
@@ -142,14 +235,25 @@ export function useFetchParallel<T extends Record<string, any>>(
 }
 
 // Hook for fetching with progressive loading (like in btc/page.tsx)
-export function useProgressiveFetch<T>(
+export function useProgressiveFetch<T extends Record<string, unknown>>(
   primaryFetch: () => Promise<T>,
-  secondaryFetchs: Array<() => Promise<any>> = [],
+  secondaryFetchs: Array<() => Promise<Record<string, unknown>>> = [],
   options: UseFetchOptions<T> = {}
 ): UseFetchResult<T> {
   const [data, setData] = useState<T | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
+  const primaryFetchRef = useRef(primaryFetch);
+  const secondaryFetchRef = useRef(secondaryFetchs);
+  const onSuccessRef = useRef(options.onSuccess);
+  const onErrorRef = useRef(options.onError);
+
+  useEffect(() => {
+    primaryFetchRef.current = primaryFetch;
+    secondaryFetchRef.current = secondaryFetchs;
+    onSuccessRef.current = options.onSuccess;
+    onErrorRef.current = options.onError;
+  }, [primaryFetch, secondaryFetchs, options.onSuccess, options.onError]);
 
   const fetchData = useCallback(async () => {
     try {
@@ -157,25 +261,29 @@ export function useProgressiveFetch<T>(
       setError(null);
 
       // Phase 1: Primary data (fast)
-      const primaryData = await primaryFetch();
+      const primaryData = await primaryFetchRef.current();
       setData(primaryData);
       setLoading(false);
 
-      if (options.onSuccess) options.onSuccess(primaryData);
+      if (onSuccessRef.current) onSuccessRef.current(primaryData);
 
       // Phase 2: Secondary data (background, non-blocking)
-      if (secondaryFetchs.length > 0) {
+      if (secondaryFetchRef.current.length > 0) {
         const secondaryResults = await Promise.allSettled(
-          secondaryFetchs.map(fn => fn())
+          secondaryFetchRef.current.map(fn => fn())
         );
 
         // Merge secondary results
-        secondaryResults.forEach((result, index) => {
-          if (result.status === 'fulfilled' && data) {
-            setData((prev: any) => ({
-              ...prev,
-              ...result.value
-            }));
+        secondaryResults.forEach((result) => {
+          if (result.status === 'fulfilled') {
+            setData((prev) => (
+              prev
+                ? {
+                    ...prev,
+                    ...result.value,
+                  }
+                : prev
+            ));
           }
         });
       }
@@ -184,24 +292,21 @@ export function useProgressiveFetch<T>(
       setError(error);
       setLoading(false);
 
-      if (options.onError) options.onError(error);
+      if (onErrorRef.current) onErrorRef.current(error);
     }
-  }, [primaryFetch, secondaryFetchs, options, data]);
+  }, []);
 
   const refetch = useCallback(async () => {
     await fetchData();
   }, [fetchData]);
 
   useEffect(() => {
-    // Use a flag to prevent calling setState during render
-    let isActive = true;
-
-    if (isActive) {
-      fetchData();
-    }
+    const initialTimer = setTimeout(() => {
+      void fetchData();
+    }, 0);
 
     return () => {
-      isActive = false;
+      clearTimeout(initialTimer);
     };
   }, [fetchData]);
 
@@ -210,7 +315,8 @@ export function useProgressiveFetch<T>(
     loading,
     error,
     refetch,
-    isStale: false
+    isStale: false,
+    isRefreshing: false
   };
 }
 

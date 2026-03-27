@@ -1,6 +1,7 @@
 import requests
 import pandas as pd
 from datetime import datetime
+import time
 
 class CryptoService:
     def __init__(self):
@@ -9,30 +10,54 @@ class CryptoService:
         # Simple in-memory cache
         self._cache = {
             'summary': {'data': None, 'timestamp': 0},
-            'klines': {'data': None, 'timestamp': 0}
+            'klines': {'data': None, 'timestamp': 0},
+            'fear_greed': {'data': None, 'timestamp': 0}
         }
-        self.CACHE_DURATION = 3 # 快速刷新，3秒缓存
+        self.SUMMARY_CACHE_DURATION = 20
+        self.FEAR_GREED_CACHE_DURATION = 300
         
         # Circuit Breaker for Binance
         self._binance_failures = 0
         self._binance_cooldown_until = 0
+        self._price_failure_count = 0
+        self._price_cooldown_until = 0
+
+    def _default_summary_snapshot(self):
+        return {
+            "price": 0,
+            "change24h": 0,
+            "change7d": 0,
+            "change30d": 0,
+            "high24h": 0,
+            "low24h": 0,
+            "volume24h": 0,
+            "fearGreed": 50,
+            "fearGreedLabel": "Neutral",
+            "source": "Fallback Snapshot",
+            "stale": True,
+            "strategy": {
+                "overall": "neutral",
+                "summary": "实时行情暂不可用，当前展示为降级快照，请稍后刷新确认。",
+                "action": "观望为主"
+            }
+        }
 
     def get_btc_summary(self):
-        import time
         now = time.time()
         
         # Check cache
-        if self._cache['summary']['data'] and (now - self._cache['summary']['timestamp'] < self.CACHE_DURATION):
+        if self._cache['summary']['data'] and (now - self._cache['summary']['timestamp'] < self.SUMMARY_CACHE_DURATION):
             return self._cache['summary']['data']
 
-        # Determine if we should try Binance
-        use_binance = True
-        if self._binance_failures >= 2:
-            if now < self._binance_cooldown_until:
-                use_binance = False
-            else:
-                use_binance = True
-        
+        if now < self._price_cooldown_until:
+            cached = self._cache['summary']['data']
+            if cached:
+                fallback = dict(cached)
+                fallback['stale'] = True
+                fallback['source'] = f"{fallback.get('source', 'Unknown')} (cooldown)"
+                return fallback
+            return self._default_summary_snapshot()
+
         price = 0
         change24h = 0
         high24h = 0
@@ -40,11 +65,10 @@ class CryptoService:
         volume24h = 0
         source = "Unknown"
         
-        # 1. 优先使用 OKX API (统一数据源)
+        # 1. 首页摘要必须轻量，优先走一个快接口
         try:
-            # OKX 现货 BTC-USDT 行情
             okx_url = "https://www.okx.com/api/v5/market/ticker?instId=BTC-USDT"
-            okx_res = requests.get(okx_url, timeout=3)
+            okx_res = requests.get(okx_url, timeout=0.8)
             okx_data = okx_res.json()
             
             if okx_data.get('code') == '0' and okx_data.get('data'):
@@ -56,11 +80,10 @@ class CryptoService:
                 low24h = float(ticker['low24h'])
                 volume24h = float(ticker['volCcy24h']) / 1000000000  # 转为十亿美元
                 source = "OKX"
-                self.CACHE_DURATION = 10
         except Exception as e:
             print(f"OKX API failed: {e}, trying fallback...")
         
-        # 2. Fallback to CoinGecko if OKX failed
+        # 2. Fallback to CoinGecko only when necessary
         if price == 0:
             try:
                 cg_url = "https://api.coingecko.com/api/v3/simple/price"
@@ -70,7 +93,7 @@ class CryptoService:
                     "include_24hr_vol": "true",
                     "include_24hr_change": "true"
                 }
-                res = requests.get(cg_url, params=params, timeout=5)
+                res = requests.get(cg_url, params=params, timeout=1.2)
                 data = res.json()['bitcoin']
                 
                 price = float(data['usd'])
@@ -79,39 +102,22 @@ class CryptoService:
                 low24h = price * 0.98
                 volume24h = float(data['usd_24h_vol']) / 1000000000
                 source = "CoinGecko"
-                self.CACHE_DURATION = 60
             except Exception as e2:
                 print(f"All price APIs failed: {e2}")
-                return None
+                self._price_failure_count += 1
+                if self._price_failure_count >= 2:
+                    self._price_cooldown_until = now + 60
+                cached = self._cache['summary']['data']
+                if cached:
+                    fallback = dict(cached)
+                    fallback['stale'] = True
+                    fallback['source'] = f"{fallback.get('source', 'Unknown')} (cached)"
+                    return fallback
+                return self._default_summary_snapshot()
         
-        # 3. Fear & Greed Index
-        try:
-            fng_res = requests.get(f"{self.fng_api_url}", timeout=2)
-            fng_data = fng_res.json()['data'][0]
-            fng_val = int(fng_data['value'])
-            fng_label = fng_data['value_classification']
-        except:
-            fng_val = 50
-            fng_label = "Neutral"
-        
-        # 4. Calculate 7D/30D change from K-lines
-        change7d = 0
-        change30d = 0
-        try:
-            kline_data = self.get_btc_klines()
-            if kline_data and 'klines' in kline_data:
-                klines = kline_data['klines']
-                if len(klines) >= 7:
-                    price_7d_ago = klines[-7]['close']
-                    change7d = ((price - price_7d_ago) / price_7d_ago) * 100
-                if len(klines) >= 30:
-                    price_30d_ago = klines[-30]['close']
-                    change30d = ((price - price_30d_ago) / price_30d_ago) * 100
-        except Exception as e:
-            print(f"7D/30D calculation error: {e}")
-        
-        # 5. Generate dynamic strategy based on market condition
-        strategy = self._generate_dynamic_strategy(price, change24h, change7d, fng_val, kline_data.get('technical', {}) if kline_data else {})
+        fng_val, fng_label = self._get_cached_fear_greed(now)
+        change7d, change30d = self._get_cached_period_changes(price)
+        strategy = self._generate_summary_strategy(change24h, fng_val)
         
         result = {
             "price": price,
@@ -124,11 +130,81 @@ class CryptoService:
             "fearGreed": fng_val,
             "fearGreedLabel": fng_label,
             "source": source,
+            "stale": False,
             "strategy": strategy
         }
         
         self._cache['summary'] = {'data': result, 'timestamp': now}
+        self._price_failure_count = 0
+        self._price_cooldown_until = 0
         return result
+
+    def _get_cached_fear_greed(self, now: float):
+        cached = self._cache['fear_greed']['data']
+        if cached and (now - self._cache['fear_greed']['timestamp'] < self.FEAR_GREED_CACHE_DURATION):
+            return cached['value'], cached['label']
+
+        try:
+            fng_res = requests.get(f"{self.fng_api_url}", timeout=0.8)
+            fng_data = fng_res.json()['data'][0]
+            result = {
+                'value': int(fng_data['value']),
+                'label': fng_data['value_classification']
+            }
+            self._cache['fear_greed'] = {'data': result, 'timestamp': now}
+            return result['value'], result['label']
+        except Exception:
+            if cached:
+                return cached['value'], cached['label']
+            return 50, "Neutral"
+
+    def _get_cached_period_changes(self, price: float):
+        cached_klines = self._cache['klines']['data']
+        if not cached_klines or 'klines' not in cached_klines:
+            return 0, 0
+
+        change7d = 0
+        change30d = 0
+        try:
+            klines = cached_klines['klines']
+            if len(klines) >= 7:
+                price_7d_ago = klines[-7]['close']
+                change7d = ((price - price_7d_ago) / price_7d_ago) * 100
+            if len(klines) >= 30:
+                price_30d_ago = klines[-30]['close']
+                change30d = ((price - price_30d_ago) / price_30d_ago) * 100
+        except Exception:
+            return 0, 0
+
+        return change7d, change30d
+
+    def _generate_summary_strategy(self, change24h, fear_greed):
+        if change24h >= 4:
+            summary = "短线偏强，但不要在急拉后追高，优先等回踩确认。"
+            overall = "bullish"
+            action = "回踩关注"
+        elif change24h <= -4:
+            summary = "短线波动加大，先观察是否止跌，再考虑分批布局。"
+            overall = "bearish"
+            action = "耐心等待"
+        elif fear_greed >= 75:
+            summary = "情绪偏热，适合降低追涨冲动，更多看确认信号。"
+            overall = "neutral"
+            action = "控制节奏"
+        elif fear_greed <= 25:
+            summary = "情绪偏冷，若技术面止跌，可留意反弹机会。"
+            overall = "neutral"
+            action = "观察企稳"
+        else:
+            summary = "当前更适合把 BTC 当作风险偏好观察器，不急于做重仓判断。"
+            overall = "neutral"
+            action = "观望为主"
+
+        return {
+            "overall": overall,
+            "summary": summary,
+            "action": action,
+        }
     
     def _generate_dynamic_strategy(self, price, change24h, change7d, fng, technical):
         """

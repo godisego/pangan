@@ -63,7 +63,19 @@ class HistoryTracker:
             "verify_result": None
         }
 
-        self._history["daily_records"].append(record)
+        existing_index = next(
+            (index for index, item in enumerate(self._history["daily_records"]) if item.get("date") == date),
+            None
+        )
+
+        if existing_index is not None:
+            previous = self._history["daily_records"][existing_index]
+            record["verified"] = previous.get("verified", False)
+            record["verify_result"] = previous.get("verify_result")
+            self._history["daily_records"][existing_index] = record
+        else:
+            self._history["daily_records"].append(record)
+
         self._save_history()
         logger.info(f"Saved daily logic for {date}")
 
@@ -94,6 +106,9 @@ class HistoryTracker:
 
         if not record:
             return None
+
+        if record.get("verified") and record.get("verify_result"):
+            return record.get("verify_result")
 
         # 获取今日行情，验证昨日推荐
         try:
@@ -184,6 +199,11 @@ class HistoryTracker:
             "verified": last_record.get("verified", False),
             "verify_result": last_record.get("verify_result")
         }
+
+    def get_recent_records(self, limit: int = 5) -> List[Dict]:
+        """获取最近若干条历史记录，按时间倒序"""
+        records = self._history.get("daily_records", [])
+        return list(reversed(records[-limit:]))
 
 
 # 单例

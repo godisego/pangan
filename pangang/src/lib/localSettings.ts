@@ -4,6 +4,8 @@ export interface UserSettings {
     wecomWebhook: string;
     telegramBotToken: string;
     telegramChatId: string;
+    telegramApiBase: string;
+    telegramProxyUrl: string;
   };
   ai: {
     provider: string;
@@ -14,6 +16,7 @@ export interface UserSettings {
     enableAStock: boolean;
     enableBtc: boolean;
     enablePush: boolean;
+    pushTime: string;
     riskProfile: 'conservative' | 'balanced' | 'aggressive';
   };
 }
@@ -25,17 +28,20 @@ export const defaultSettings: UserSettings = {
     feishuWebhook: '',
     wecomWebhook: '',
     telegramBotToken: '',
-    telegramChatId: ''
+    telegramChatId: '',
+    telegramApiBase: 'https://api.telegram.org',
+    telegramProxyUrl: ''
   },
   ai: {
     provider: 'zhipu',
     apiKey: '',
-    model: 'glm-4-flash'
+    model: 'glm-4.7-flash'
   },
   preferences: {
     enableAStock: true,
     enableBtc: true,
     enablePush: false,
+    pushTime: '08:00',
     riskProfile: 'balanced'
   }
 };

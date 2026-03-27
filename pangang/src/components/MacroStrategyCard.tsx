@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import { stockApi, macroApi } from '@/lib/api';
+import { loadUserSettings } from '@/lib/localSettings';
 import type { MacroDashboard, TrendingItem, StockSignal, SelectionData } from '@/types/api';
 
 // --- Interfaces ---
@@ -59,15 +60,6 @@ function SignalRow({ signal }: { signal: StockSignal }) {
 
 function SkeletonPulse({ className = "" }: { className?: string }) {
     return <div className={`animate-pulse bg-[var(--bg-secondary)]/50 rounded ${className}`} />;
-}
-
-function MacroSkeleton() {
-    return (
-        <div className="space-y-3">
-            <SkeletonPulse className="h-4 w-32" />
-            <SkeletonPulse className="h-16 w-full rounded-lg" />
-        </div>
-    );
 }
 
 function TrendingSkeleton() {
@@ -194,7 +186,12 @@ export default function MacroStrategyDashboard({ className = "" }: { className?:
         }, 1000);
 
         try {
-            const json = await macroApi.getDashboard();
+            const settings = loadUserSettings();
+            const json = await macroApi.getDashboard({
+                provider: settings.ai.provider,
+                apiKey: settings.ai.apiKey,
+                model: settings.ai.model || 'glm-4.7-flash',
+            });
             setMacroData(json);
             // 如果 AI 分析返回了 trending，覆盖独立请求的数据
             if (json.trending && json.trending.length > 0) {
@@ -257,6 +254,11 @@ export default function MacroStrategyDashboard({ className = "" }: { className?:
                     <span className="font-semibold text-[var(--text-primary)]">宏观战略仪表盘</span>
                 </div>
                 <div className="flex items-center gap-2">
+                    {macroData?.engine && (
+                        <span className="text-[10px] px-1.5 rounded bg-white/5 text-[var(--text-secondary)] border border-white/10">
+                            {macroData.engine.used_api ? `${macroData.engine.provider} · ${macroData.engine.model}` : '规则兜底'}
+                        </span>
+                    )}
                     {macroData?.confidence_score && (
                         <span className="text-[10px] px-1.5 rounded bg-white/5 text-[var(--text-secondary)] border border-white/10">
                             AI置信度: {macroData.confidence_score === 'High' ? '高' : '中'}

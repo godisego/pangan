@@ -14,19 +14,27 @@ import type {
   StockDetail,
   MacroDashboard,
   MacroTrending,
+  ChatCompletionRequest,
+  ChatCompletionResponse,
   NotificationRequest,
   NotificationResponse,
   HealthCheck,
   FetchOptions,
-  BtcDetail,
-  CommanderOrder
+  CommanderOrder,
+  CommanderSummary,
+  CommanderHistoryRecord,
+  CommanderReviewDetail
 } from '../types/api';
 
 // ============================================
 // Configuration
 // ============================================
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+const API_BASE_URL =
+  process.env.NEXT_PUBLIC_API_URL ||
+  (typeof window !== 'undefined'
+    ? `${window.location.protocol}//${window.location.hostname}:8000`
+    : 'http://127.0.0.1:8000');
 const DEFAULT_TIMEOUT = 10000; // 10 seconds
 const DEFAULT_RETRIES = 2;
 
@@ -144,6 +152,64 @@ async function fetchApi<T>(
   throw lastError || new ApiError('Unknown error occurred');
 }
 
+async function fetchSameOriginApi<T>(
+  endpoint: string,
+  options: FetchOptions = {}
+): Promise<T> {
+  const {
+    timeout = DEFAULT_TIMEOUT,
+    retries = DEFAULT_RETRIES,
+    method = 'GET',
+    body,
+    headers = {}
+  } = options;
+
+  const requestHeaders: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...headers
+  };
+
+  let lastError: Error | null = null;
+
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const response = await fetchWithTimeout(endpoint, {
+        method,
+        headers: requestHeaders,
+        body: body ? JSON.stringify(body) : undefined,
+        timeout
+      });
+
+      if (!response.ok) {
+        throw new ApiError(
+          `API Error: ${response.statusText}`,
+          response.status,
+          endpoint
+        );
+      }
+
+      const data = await response.json();
+      return data as T;
+    } catch (error) {
+      lastError = error as Error;
+
+      if (error instanceof ApiError && error.statusCode && error.statusCode >= 400 && error.statusCode < 500) {
+        throw error;
+      }
+
+      if (error instanceof TimeoutError && attempt === retries) {
+        throw error;
+      }
+
+      if (attempt < retries) {
+        await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 1000));
+      }
+    }
+  }
+
+  throw lastError || new ApiError('Unknown error occurred');
+}
+
 // ============================================
 // BTC API Functions
 // ============================================
@@ -153,7 +219,7 @@ export const btcApi = {
    * Get BTC summary data
    */
   getSummary: (): Promise<BtcSummary> =>
-    fetchApi<BtcSummary>('/api/btc/summary'),
+    fetchSameOriginApi<BtcSummary>('/api/btc/summary', { timeout: 5000, retries: 0 }),
 
   /**
    * Get BTC technical analysis
@@ -188,7 +254,14 @@ export const btcApi = {
   /**
    * Get all BTC detail data (combined)
    */
-  getDetail: async (): Promise<any> => {
+  getDetail: async (): Promise<
+    BtcSummary &
+    BtcTechnical & {
+      derivatives: BtcDerivatives | null;
+      network: BtcNetwork | null;
+      market: BtcMarket | null;
+    }
+  > => {
     const [summary, technical, derivatives, network, market] = await Promise.all([
       fetchApi<BtcSummary>('/api/btc/summary'),
       fetchApi<BtcTechnical>('/api/btc/technical'),
@@ -216,7 +289,7 @@ export const stockApi = {
    * Get stock market data
    */
   getMarket: (): Promise<StockMarket> =>
-    fetchApi<StockMarket>('/api/stock/market'),
+    fetchSameOriginApi<StockMarket>('/api/stock/market', { timeout: 5000, retries: 0 }),
 
   /**
    * Get stock selection data
@@ -245,14 +318,31 @@ export const macroApi = {
   /**
    * Get macro dashboard data
    */
-  getDashboard: (): Promise<MacroDashboard> =>
-    fetchApi<MacroDashboard>('/api/macro/dashboard', { timeout: 60000 }),
+  getDashboard: (aiConfig?: { provider?: string; apiKey?: string; model?: string }): Promise<MacroDashboard> =>
+    fetchApi<MacroDashboard>('/api/macro/dashboard', {
+      timeout: 60000,
+      headers: aiConfig?.apiKey ? {
+        'x-ai-provider': aiConfig.provider || 'zhipu',
+        'x-ai-api-key': aiConfig.apiKey,
+        'x-ai-model': aiConfig.model || 'glm-4.7-flash',
+      } : {}
+    }),
 
   /**
    * Get trending news
    */
   getTrending: (): Promise<MacroTrending> =>
     fetchApi<MacroTrending>('/api/macro/trending')
+};
+
+export const chatApi = {
+  send: (payload: ChatCompletionRequest): Promise<ChatCompletionResponse> =>
+    fetchApi<ChatCompletionResponse>('/api/chat', {
+      method: 'POST',
+      body: payload,
+      timeout: 30000,
+      retries: 0,
+    })
 };
 
 // ============================================
@@ -288,8 +378,33 @@ export const healthApi = {
 
 export const commanderApi = {
   getOrder: async (): Promise<CommanderOrder> => {
-    const response = await fetchApi<{ status: string; data: CommanderOrder }>('/api/commander/order', {
-      timeout: 60000
+    const response = await fetchSameOriginApi<{ status: string; data: CommanderOrder }>('/api/commander/order', {
+      timeout: 8000,
+      retries: 0,
+    });
+    return response.data;
+  },
+
+  getSummary: async (): Promise<CommanderSummary> => {
+    const response = await fetchSameOriginApi<{ status: string; data: CommanderSummary }>('/api/commander/summary', {
+      timeout: 5000,
+      retries: 0,
+    });
+    return response.data;
+  },
+
+  getHistory: async (limit: number = 10): Promise<CommanderHistoryRecord[]> => {
+    const response = await fetchSameOriginApi<{ status: string; data: CommanderHistoryRecord[] }>(`/api/commander/history?limit=${limit}`, {
+      timeout: 5000,
+      retries: 0,
+    });
+    return response.data;
+  },
+
+  getReviewByDate: async (date: string): Promise<CommanderReviewDetail | null> => {
+    const response = await fetchSameOriginApi<{ status: string; data: CommanderReviewDetail | null }>(`/api/commander/review/${date}`, {
+      timeout: 5000,
+      retries: 0,
     });
     return response.data;
   }
@@ -299,12 +414,15 @@ export const commanderApi = {
 // Export default API client
 // ============================================
 
-export default {
+const apiClient = {
   btc: btcApi,
   stock: stockApi,
   macro: macroApi,
+  chat: chatApi,
   notify: notifyApi,
   commander: commanderApi,
   health: healthApi,
   fetch: fetchApi
 };
+
+export default apiClient;

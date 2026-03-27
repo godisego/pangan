@@ -21,7 +21,7 @@ class SinaFetcher(BaseFetcher):
             symbols = ["sh000001", "sz399001", "sz399006"]
             url = f"http://hq.sinajs.cn/list={','.join(symbols)}"
             headers = {"Referer": "http://finance.sina.com.cn"}
-            res = requests.get(url, headers=headers, timeout=5)
+            res = requests.get(url, headers=headers, timeout=2.5)
             
             lines = res.text.strip().split('\n')
             results = []
@@ -96,7 +96,7 @@ class SinaFetcher(BaseFetcher):
                 "User-Agent": "Mozilla/5.0",
                 "Referer": "https://finance.sina.com.cn/",
             }
-            resp = requests.get(url, headers=headers, timeout=10)
+            resp = requests.get(url, headers=headers, timeout=3)
             resp.encoding = 'gbk'
             text = resp.text
 
@@ -182,7 +182,7 @@ class SinaFetcher(BaseFetcher):
                 headers = {"Referer": "http://finance.sina.com.cn"}
                 
                 try:
-                    res = requests.get(url, headers=headers, timeout=5)
+                    res = requests.get(url, headers=headers, timeout=2.5)
                     lines = res.text.strip().split('\n')
                     
                     for line in lines:

@@ -20,6 +20,19 @@ async def get_battle_order():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/summary")
+async def get_battle_summary():
+    """首页总控台使用的轻量摘要"""
+    try:
+        data = battle_commander.generate_commander_summary()
+        return {
+            "status": "success",
+            "data": data
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/weather")
 async def get_battle_weather():
     """仅获取战场天气 (第一部分)"""
@@ -39,6 +52,46 @@ async def get_yesterday_review():
         from app.services.history_tracker import history_tracker
         result = history_tracker.verify_yesterday_logic()
         return {"status": "success", "data": result or {"message": "无昨日记录"}}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/history")
+async def get_commander_history(limit: int = 10):
+    """获取最近作战记录"""
+    try:
+        from app.services.history_tracker import history_tracker
+        records = history_tracker.get_recent_records(limit=limit)
+        return {"status": "success", "data": records}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/review/{date}")
+async def get_review_by_date(date: str):
+    """按日期获取验证结果，未验证时尝试即时验证"""
+    try:
+        from app.services.history_tracker import history_tracker
+        records = history_tracker.get_recent_records(limit=100)
+        record = next((item for item in records if item.get("date") == date), None)
+
+        if not record:
+            return {"status": "success", "data": None}
+
+        verify_result = record.get("verify_result")
+        if not verify_result:
+            verify_result = history_tracker.verify_yesterday_logic(date)
+
+        return {
+            "status": "success",
+            "data": {
+                "date": date,
+                "logic_a": record.get("logic_a", {}),
+                "logic_b": record.get("logic_b", {}),
+                "verified": record.get("verified", False),
+                "verify_result": verify_result
+            }
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

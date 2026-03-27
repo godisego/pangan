@@ -6,6 +6,7 @@
 import logging
 from typing import Dict, List, Optional, Any
 from datetime import datetime, time
+import time as time_module
 import akshare as ak
 import pandas as pd
 
@@ -20,12 +21,27 @@ class CallAuctionFetcher:
 
     def __init__(self):
         self.base_url = "https://push2.eastmoney.com"
+        self._summary_cache: Optional[Dict[str, Any]] = None
+        self._summary_cache_ts: float = 0
+        self._stocks_cache: List[Dict[str, Any]] = []
+        self._stocks_cache_ts: float = 0
+        self._cache_ttl: int = 180
+
+    def _in_auction_window(self) -> bool:
+        now = datetime.now().time()
+        return time(9, 15) <= now <= time(9, 30)
 
     def fetch_call_auction_data(self) -> Optional[Dict[str, Any]]:
         """
         获取集合竞价汇总数据
         返回：竞价涨停家数、高开家数、低开家数等
         """
+        if not self._in_auction_window():
+            return dict(self._summary_cache) if self._summary_cache else None
+
+        if self._summary_cache and (time_module.time() - self._summary_cache_ts) < self._cache_ttl:
+            return dict(self._summary_cache)
+
         try:
             # 获取全市场竞价数据 (东方财富)
             df = ak.stock_zh_a_spot_em()
@@ -53,7 +69,7 @@ class CallAuctionFetcher:
             # 计算红盘率
             red_ratio = round((up_count / total) * 100, 1) if total > 0 else 0
 
-            return {
+            result = {
                 "total_stocks": total,
                 "up_count": up_count,
                 "down_count": down_count,
@@ -66,16 +82,25 @@ class CallAuctionFetcher:
                 "red_ratio": red_ratio,
                 "timestamp": datetime.now().isoformat()
             }
+            self._summary_cache = result
+            self._summary_cache_ts = time_module.time()
+            return result
 
         except Exception as e:
             logger.error(f"Fetch call auction data error: {e}")
-            return None
+            return dict(self._summary_cache) if self._summary_cache else None
 
     def fetch_top_call_auction_stocks(self, limit: int = 20) -> List[Dict]:
         """
         获取竞价涨幅榜前列的股票
         用于识别"一字板"龙头
         """
+        if not self._in_auction_window():
+            return list(self._stocks_cache[:limit]) if self._stocks_cache else []
+
+        if self._stocks_cache and (time_module.time() - self._stocks_cache_ts) < self._cache_ttl:
+            return list(self._stocks_cache[:limit])
+
         try:
             df = ak.stock_zh_a_spot_em()
 
@@ -115,11 +140,13 @@ class CallAuctionFetcher:
                     "price": float(row['最新价']) if pd.notna(row['最新价']) else 0,
                 })
 
+            self._stocks_cache = result
+            self._stocks_cache_ts = time_module.time()
             return result
 
         except Exception as e:
             logger.error(f"Fetch top call auction stocks error: {e}")
-            return []
+            return list(self._stocks_cache[:limit]) if self._stocks_cache else []
 
     def get_auction_weather(self, auction_data: Dict) -> Dict[str, Any]:
         """

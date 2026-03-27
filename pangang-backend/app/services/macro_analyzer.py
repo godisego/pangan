@@ -16,16 +16,31 @@ class MacroAnalyzer:
     def __init__(self):
         self.data_manager = DataFetcherManager()
         self.api_key = os.getenv("ZHIPUAI_API_KEY")
+        self.default_model = os.getenv("ZHIPUAI_MODEL", "glm-4.7-flash")
         if not self.api_key:
             logger.warning("ZHIPUAI_API_KEY not found")
             self.client = None
         else:
             self.client = ZhipuAI(api_key=self.api_key)
 
-    async def generate_strategy_dashboard(self) -> Dict[str, Any]:
+    def _build_client(self, api_key: Optional[str] = None) -> Optional[ZhipuAI]:
+        key = api_key or self.api_key
+        if not key:
+            return None
+        if api_key:
+            return ZhipuAI(api_key=api_key)
+        return self.client
+
+    async def generate_strategy_dashboard(
+        self,
+        api_key: Optional[str] = None,
+        model: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
         生成宏观战略仪表盘内容
         """
+        selected_model = model or self.default_model
+        client = self._build_client(api_key)
         try:
             # 1. 获取基础数据
             macro_data = self.data_manager.fetch_macro_data()
@@ -44,12 +59,18 @@ class MacroAnalyzer:
             prompt = self._build_macro_prompt(macro_data, news_list, market_indices, hot_sectors=hot_sectors, trending=trending_news)
             
             # 3. 调用 AI
-            if not self.client:
+            if not client:
                 logger.warning("No API Key, using Rule-Based Strategy")
-                return await self._generate_rule_based_strategy(macro_data, market_indices, hot_sectors=hot_sectors)
+                result = await self._generate_rule_based_strategy(macro_data, market_indices, hot_sectors=hot_sectors)
+                result["engine"] = {
+                    "provider": "rule-based",
+                    "model": "rule-based",
+                    "used_api": False,
+                }
+                return result
 
-            response = self.client.chat.completions.create(
-                model="glm-4-flash",
+            response = client.chat.completions.create(
+                model=selected_model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1
             )
@@ -65,18 +86,30 @@ class MacroAnalyzer:
                 "catalysts": result_json.get("catalysts", []),
                 "defense": result_json.get("defense", {}),
                 "operational_logic": result_json.get("operational_logic", "市场不明朗，建议观望"),
-                "trending": trending_news[:5] if trending_news else []
+                "trending": trending_news[:5] if trending_news else [],
+                "engine": {
+                    "provider": "zhipu",
+                    "model": selected_model,
+                    "used_api": True,
+                }
             }
 
         except Exception as e:
             logger.error(f"Macro analysis failed: {e}")
             # Try to get data if available even in exception
             try:
-                return await self._generate_rule_based_strategy(
+                result = await self._generate_rule_based_strategy(
                     macro_data if 'macro_data' in locals() else None, 
                     market_indices if 'market_indices' in locals() else None, 
                     hot_sectors=hot_sectors if 'hot_sectors' in locals() else None
                 )
+                result["engine"] = {
+                    "provider": "rule-based",
+                    "model": selected_model,
+                    "used_api": False,
+                    "fallback_reason": str(e),
+                }
+                return result
             except:
                 return self._mock_response()
 
@@ -388,7 +421,12 @@ class MacroAnalyzer:
                 "reason": defense_reason_text
             },
             "operational_logic": op_logic,
-            "trending": self.data_manager.fetch_trending_news(limit=5)
+            "trending": self.data_manager.fetch_trending_news(limit=5),
+            "engine": {
+                "provider": "rule-based",
+                "model": "rule-based",
+                "used_api": False,
+            }
         }
 
     def _mock_response(self):
@@ -401,7 +439,12 @@ class MacroAnalyzer:
                 "score": 5
             },
             "catalysts": [],
-            "operational_logic": "暂停操作，观察系统状态"
+            "operational_logic": "暂停操作，观察系统状态",
+            "engine": {
+                "provider": "rule-based",
+                "model": "rule-based",
+                "used_api": False,
+            }
         }
 
 macro_analyzer = MacroAnalyzer()

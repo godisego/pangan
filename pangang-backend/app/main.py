@@ -1,14 +1,16 @@
 import os
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
-from app.api.endpoints import btc, stock, notify, battle_commander
+from app.api.endpoints import btc, stock, notify, battle_commander, chat
 from app.routers import macro
-from app.api.endpoints.notify import trigger_daily_report
+from app.api.endpoints.notify import send_daily_report_now
+from app.services.notification_service import notification_service
 
 app = FastAPI(
     title="Pangang API",
@@ -21,14 +23,20 @@ app.include_router(stock.router, prefix="/api/stock", tags=["stock"])
 app.include_router(notify.router, prefix="/api/notify", tags=["notify"])
 app.include_router(macro.router, prefix="/api/macro", tags=["macro"])
 app.include_router(battle_commander.router, prefix="/api/commander", tags=["battle_commander"])
+app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
 
 # CORS configuration
 frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
-enable_daily_scheduler = os.getenv("ENABLE_DAILY_SCHEDULER", "false").lower() == "true"
+allow_origins = [
+    frontend_url,
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
+enable_daily_scheduler = os.getenv("ENABLE_DAILY_SCHEDULER", "true").lower() == "true"
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[frontend_url],
+    allow_origins=list(dict.fromkeys(allow_origins)),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -43,39 +51,35 @@ def health_check():
     return {
         "status": "healthy",
         "frontend_url": frontend_url,
-        "scheduler_enabled": enable_daily_scheduler
+        "allow_origins": list(dict.fromkeys(allow_origins)),
+        "scheduler_enabled": enable_daily_scheduler,
+        "schedule": notification_service.get_config(masked=False).get("schedule", {}),
     }
 
-# Simple Scheduler Logic
 async def scheduler_loop():
-    print("📅 Daily Scheduler started. Waiting for 08:00...")
+    print("📅 Notification Scheduler started.")
     while True:
         try:
-            now = datetime.now()
-            # Target: 08:00 Today
-            target = now.replace(hour=8, minute=0, second=0, microsecond=0)
-            
-            # If already passed 08:00, schedule for tomorrow
-            if now >= target:
-                target += timedelta(days=1)
-                
-            wait_seconds = (target - now).total_seconds()
-            print(f"⏳ Next Daily Report in {wait_seconds/3600:.1f} hours ({target})")
-            
-            await asyncio.sleep(wait_seconds)
-            
-            print("🚀 Sending Daily Report...")
-            # We don't pass webhook_url, relying on env var in NotificationService
-            await trigger_daily_report()
-            
-            # Wait a bit to avoid double firing
-            await asyncio.sleep(60)
-            
+            schedule = notification_service.get_config(masked=False).get("schedule", {})
+            timezone_name = schedule.get("timezone") or "Asia/Shanghai"
+            try:
+                now = datetime.now(ZoneInfo(timezone_name))
+            except Exception:
+                now = datetime.now()
+
+            if notification_service.should_send_daily(now):
+                print(f"🚀 Sending scheduled daily report at {now.isoformat()}")
+                result = await send_daily_report_now()
+                if result.get("status") != "error":
+                    notification_service.mark_daily_sent(now)
+                print(f"📬 Scheduled report result: {result.get('status')}")
+
+            await asyncio.sleep(20)
         except asyncio.CancelledError:
             break
         except Exception as e:
             print(f"Scheduler Error: {e}")
-            await asyncio.sleep(60) # Retry after 1 min
+            await asyncio.sleep(60)
 
 @app.on_event("startup")
 async def start_scheduler():

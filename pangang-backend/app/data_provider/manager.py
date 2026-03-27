@@ -43,6 +43,10 @@ class DataFetcherManager:
              "limit_up": 0, "limit_down": 0, "median_change": 0.0,
              "northFlow": 0.0, "timestamp": 0
         }
+        self._market_cache = {"data": None, "timestamp": 0}
+        self._market_cache_ttl = 20
+        self._hot_sector_cache = {"data": [], "timestamp": 0}
+        self._hot_sector_cache_ttl = 60
         self._executor = ThreadPoolExecutor(max_workers=1) # Initialize ThreadPoolExecutor
         self._news_aggregator = NewsAggregator()
         self._start_background_scheduler()
@@ -99,19 +103,30 @@ class DataFetcherManager:
 
     def fetch_market_indices(self) -> Optional[Dict[str, Any]]:
         """获取大盘指数 (带Fallback + Enrichment)"""
+        now = time.time()
+        if self._market_cache["data"] and (now - self._market_cache["timestamp"]) < self._market_cache_ttl:
+            return dict(self._market_cache["data"])
+
         data = None
-        # 1. Fetch Basic Indices (Prefer Sina)
-        for fetcher in self._fetchers:
+        primary_fetcher = next((f for f in self._fetchers if isinstance(f, SinaFetcher)), None)
+        fetchers = [primary_fetcher] if primary_fetcher else self._fetchers[:1]
+
+        for fetcher in fetchers:
+            if not fetcher:
+                continue
             try:
                 data = fetcher.fetch_market_indices()
                 if data:
                     break
             except Exception as e:
                 logger.warning(f"Fetcher {fetcher.name} failed for indices: {e}")
-                continue
-        
+
         if not data:
-            logger.error("All fetchers failed for market indices")
+            if self._market_cache["data"]:
+                fallback = dict(self._market_cache["data"])
+                fallback["stale"] = True
+                return fallback
+            logger.error("Primary market fetcher failed for market indices")
             return None
 
         # 2. Enrich with Market Stats (Breadth, Limits)
@@ -146,6 +161,8 @@ class DataFetcherManager:
         if total > 0:
             data['breadth'] = int((data.get('up_count', 0) / total) * 100)
 
+        self._market_cache["data"] = dict(data)
+        self._market_cache["timestamp"] = now
         return data
 
     def get_realtime_quotes_ak(self, codes: list = None) -> Dict:
@@ -161,19 +178,31 @@ class DataFetcherManager:
 
     def fetch_hot_sectors(self) -> List[Dict]:
         """获取热门板块 (带Fallback: 优先新浪，备选AKShare)"""
-        # 由于AKShare使用东财API，受VPN干扰严重，优先使用新浪数据源
-        for fetcher in self._fetchers:
+        now = time.time()
+        cached = self._hot_sector_cache["data"]
+        if cached and (now - self._hot_sector_cache["timestamp"]) < self._hot_sector_cache_ttl:
+            return list(cached)
+
+        preferred_fetcher = next((f for f in self._fetchers if isinstance(f, SinaFetcher)), None)
+        fetchers = [preferred_fetcher] if preferred_fetcher else self._fetchers[:1]
+
+        for fetcher in fetchers:
+            if not fetcher:
+                continue
             try:
                 data = fetcher.fetch_hot_sectors()
                 if data and len(data) > 0:
                     logger.info(f"Got {len(data)} hot sectors from {fetcher.name}")
+                    self._hot_sector_cache["data"] = list(data)
+                    self._hot_sector_cache["timestamp"] = now
                     return data
             except Exception as e:
                 logger.warning(f"Fetcher {fetcher.name} failed for hot sectors: {e}")
-                continue
 
-        logger.error("All fetchers failed for hot sectors, returning mock data")
-        # 兜底：返回空列表让前端优雅降级
+        if cached:
+            return list(cached)
+
+        logger.error("Primary hot sector fetcher failed, returning empty list")
         return []
 
     def fetch_sector_details(self, sector_name: str) -> Dict:

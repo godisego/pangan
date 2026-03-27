@@ -31,3 +31,6 @@ build/
 
 # Local app config
 config.json
+
+# Runtime data
+pangang-backend/app/data/

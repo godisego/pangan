@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 
@@ -23,17 +23,45 @@ interface ChainSegment {
     stocks: Stock[];
 }
 
+interface DimensionScore {
+    id: string;
+    label: string;
+    score: number;
+    color: string;
+}
+
+interface ConceptOverview {
+    stage: string;
+    confidence: number;
+    sectorChange: number;
+    positiveCount: number;
+    negativeCount: number;
+    leaderAveragePrice: number;
+    turnover: number;
+    leaderTurnoverRatio: number;
+}
+
 interface ConceptDetail {
     name: string;
     count: number;
     avgChange: number;
-    price?: number;
-    volumeMultiplier?: number;
-    chainStructure?: ChainSegment[]; // New structured data
+    chainStructure?: ChainSegment[];
     groups?: {
         leaders: Stock[];
         followers: Stock[];
         declining: Stock[];
+    };
+    dimensions?: DimensionScore[];
+    overview?: ConceptOverview;
+    news?: Array<{
+        title: string;
+        source: string;
+        time: string;
+    }>;
+    dataSource?: {
+        sector: string;
+        hotSectorMatched: boolean;
+        matchedSectorName?: string | null;
     };
     // Extra AI Analysis fields
     logic?: {
@@ -41,14 +69,6 @@ interface ConceptDetail {
         summary: string;
         supports: string[];
         risks: string[];
-    };
-    scores?: {
-        technical: number;
-        capital: number;
-        inventory: number;
-        macro: number;
-        supply: number;
-        demand: number;
     };
     stocks: Stock[]; // Keep for compatibility
 }
@@ -85,9 +105,9 @@ function LogicCard({ logic }: { logic: ConceptDetail['logic'] }) {
     if (!logic) return null;
 
     const statusConfig = {
-        valid: { color: 'text-green-400', bg: 'bg-green-500/10', icon: '✅', label: '逻辑成立' },
-        invalid: { color: 'text-red-400', bg: 'bg-red-500/10', icon: '❌', label: '逻辑证伪' },
-        neutral: { color: 'text-yellow-400', bg: 'bg-yellow-500/10', icon: '⏳', label: '观察中' },
+        valid: { color: 'text-green-400', bg: 'bg-green-500/10', border: 'border-green-500/20', icon: '✅', label: '逻辑成立' },
+        invalid: { color: 'text-red-400', bg: 'bg-red-500/10', border: 'border-red-500/20', icon: '❌', label: '逻辑证伪' },
+        neutral: { color: 'text-yellow-400', bg: 'bg-yellow-500/10', border: 'border-yellow-500/20', icon: '⏳', label: '观察中' },
     };
     const status = statusConfig[logic.status];
 
@@ -97,7 +117,7 @@ function LogicCard({ logic }: { logic: ConceptDetail['logic'] }) {
                 <span className="text-sm font-medium text-[var(--text-primary)]">💡 逻辑验证</span>
             </div>
 
-            <div className={`p-3 rounded mb-4 ${status.bg} border border-${status.color}/20`}>
+            <div className={`p-3 rounded mb-4 border ${status.bg} ${status.border}`}>
                 <div className={`flex items-center gap-2 font-bold mb-1 ${status.color}`}>
                     <span>{status.icon}</span>
                     <span>{status.label}</span>
@@ -133,50 +153,18 @@ function LogicCard({ logic }: { logic: ConceptDetail['logic'] }) {
     );
 }
 
-function SixDimensionsCard({ scores }: { scores: ConceptDetail['scores'] }) {
-    if (!scores) return null;
+function SixDimensionsCard({ dimensions }: { dimensions: ConceptDetail['dimensions'] }) {
+    if (!dimensions || dimensions.length === 0) return null;
     return (
         <section className="card bg-[var(--bg-secondary)]/30">
             <h3 className="text-sm font-medium text-[var(--text-primary)] mb-4">📊 六维度评分</h3>
             <div className="grid grid-cols-2 gap-x-8 gap-y-2">
-                <ScoreBar label="技术面" score={scores.technical} color="bg-blue-500" />
-                <ScoreBar label="量价关系" score={scores.capital} color="bg-orange-500" />
-                <ScoreBar label="库存/基差" score={scores.inventory} color="bg-purple-500" />
-                <ScoreBar label="宏观环境" score={scores.macro} color="bg-yellow-500" />
-                <ScoreBar label="上游供给" score={scores.supply} color="bg-cyan-500" />
-                <ScoreBar label="下游需求" score={scores.demand} color="bg-pink-500" />
-            </div>
-        </section>
-    );
-}
-
-function StockListModule({ title, stocks, icon }: { title: string; stocks: Stock[]; icon: string }) {
-    if (!stocks || stocks.length === 0) return null;
-
-    return (
-        <section>
-            <h3 className="text-sm font-medium text-[var(--text-primary)] mb-3 flex items-center gap-2">
-                {icon} {title}
-                <span className="text-xs text-[var(--text-secondary)] font-normal">({stocks.length})</span>
-            </h3>
-            <div className="space-y-2">
-                {stocks.map((stock, i) => (
-                    <Link key={stock.code} href={`/stock/${stock.code}`} className="flex items-center justify-between p-3 bg-[var(--bg-secondary)]/30 hover:bg-[var(--bg-secondary)] rounded-lg transition-colors">
-                        <div>
-                            <div className="text-sm font-medium text-[var(--text-primary)]">{stock.name}</div>
-                            <div className="text-xs text-[var(--text-secondary)]">{stock.code}</div>
-                        </div>
-                        <div className="text-right">
-                            <div className={`text-sm font-bold ${stock.change >= 0 ? 'text-[var(--accent-green)]' : 'text-[var(--accent-red)]'}`}>
-                                {stock.change >= 0 ? '+' : ''}{stock.change}%
-                            </div>
-                            <div className="text-[10px] text-[var(--text-secondary)]">核心度 {stock.coreScore || '-'}</div>
-                        </div>
-                    </Link>
+                {dimensions.map((item) => (
+                    <ScoreBar key={item.id} label={item.label} score={item.score} color={item.color} />
                 ))}
             </div>
         </section>
-    )
+    );
 }
 
 // --- New Component: MarketSentimentTabs ---
@@ -205,7 +193,7 @@ function MarketSentimentTabs({ groups }: { groups: ConceptDetail['groups'] }) {
                 {tabs.map((tab) => (
                     <button
                         key={tab.id}
-                        onClick={() => setActiveTab(tab.id as any)}
+                        onClick={() => setActiveTab(tab.id as 'leaders' | 'followers' | 'declining')}
                         className={`flex-1 py-3 text-sm font-medium transition-all relative ${activeTab === tab.id
                             ? 'text-[var(--text-primary)] bg-[var(--bg-secondary)]/50'
                             : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-secondary)]/30'
@@ -272,9 +260,9 @@ function MarketSentimentTabs({ groups }: { groups: ConceptDetail['groups'] }) {
 
             {/* Footer / View All */}
             <div className="p-2 text-center border-t border-[var(--border-color)] bg-[var(--bg-secondary)]/10">
-                <button className="text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] flex items-center justify-center gap-1 w-full py-1">
-                    查看全部 {activeTab === 'leaders' ? '龙头' : activeTab === 'followers' ? '跟涨' : '调整'}标的 →
-                </button>
+                <div className="text-xs text-[var(--text-secondary)] py-1">
+                    当前展示 {activeTab === 'leaders' ? '最强龙头' : activeTab === 'followers' ? '中军承接' : '回调观察'} 前排标的
+                </div>
             </div>
         </section>
     );
@@ -289,91 +277,29 @@ export default function ChainDetailPage() {
 
     const [data, setData] = useState<ConceptDetail | null>(null);
     const [loading, setLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
 
-    const fetchData = async () => {
+    const fetchData = useCallback(async () => {
         if (!chainName) return;
         try {
-            const res = await fetch(`http://localhost:8000/api/stock/chain/${encodeURIComponent(chainName)}`);
+            const res = await fetch(`/api/stock/chain/${encodeURIComponent(chainName)}`, { cache: 'no-store' });
             if (!res.ok) throw new Error("Failed to fetch");
             const json = await res.json();
-
-            // Inject Mock AI Analysis & Fallback Logic if missing
-            if (!json.logic) {
-                if (chainName.includes("光模块") || chainName.includes("AI")) {
-                    json.logic = {
-                        status: 'valid',
-                        summary: 'AI大模型参数量指数级增长，算力需求倒逼光通信带宽升级，800G/1.6T光模块处于供不应求状态，行业景气度持续向上。',
-                        supports: ['北美云厂商资本开支增加', '国产光模块全球份额领先', '硅光技术渗透率提升'],
-                        risks: ['下游砍单风险', '技术路线迭代过快', '贸易摩擦加剧']
-                    };
-                    json.scores = { technical: 85, capital: 90, inventory: 70, macro: 60, supply: 65, demand: 95 };
-                    json.price = 2854.32;
-                    json.volumeMultiplier = 2.1;
-                } else {
-                    json.logic = {
-                        status: 'neutral',
-                        summary: '当前板块处于震荡整理期，基本面暂无重大变化，等待右侧突破信号。',
-                        supports: ['估值处于低位', '政策预期改善'],
-                        risks: ['需求复苏不及预期', '流动性收紧']
-                    };
-                    json.scores = { technical: 45, capital: 50, inventory: 50, macro: 50, supply: 50, demand: 50 };
-                    json.price = 1000.00;
-                    json.volumeMultiplier = 1.0;
-                }
-            }
-
-            // Fallback for chainStructure (上中下游) if missing or empty
-            if (!json.chainStructure || json.chainStructure.length === 0) {
-                json.chainStructure = [
-                    {
-                        segment: "上游 · 核心器件",
-                        tag: "技术壁垒",
-                        stage: "成熟期",
-                        benefitLevel: 4,
-                        stocks: json.stocks?.slice(0, 3).map((s: Stock, i: number) => ({ ...s, rank: i + 1, coreScore: 85 - i * 5, elasticity: "高弹性" })) || []
-                    },
-                    {
-                        segment: "中游 · 设备制造",
-                        tag: "当前最优布局点",
-                        stage: "启动期",
-                        benefitLevel: 5,
-                        stocks: json.stocks?.slice(3, 6).map((s: Stock, i: number) => ({ ...s, rank: i + 1, coreScore: 90 - i * 3, elasticity: "极高" })) || []
-                    },
-                    {
-                        segment: "下游 · 应用场景",
-                        tag: "需求驱动",
-                        stage: "渗透期",
-                        benefitLevel: 3,
-                        stocks: json.stocks?.slice(6, 9).map((s: Stock, i: number) => ({ ...s, rank: i + 1, coreScore: 75 - i * 5, elasticity: "中性" })) || []
-                    }
-                ];
-            }
-
-            // Fallback for groups (市场情绪看板) if missing or empty
-            if (!json.groups || Object.keys(json.groups).length === 0 ||
-                (!json.groups.leaders?.length && !json.groups.followers?.length && !json.groups.declining?.length)) {
-                const allStocks = json.stocks || [];
-                const sorted = [...allStocks].sort((a: Stock, b: Stock) => b.change - a.change);
-                json.groups = {
-                    leaders: sorted.filter((s: Stock) => s.change > 5).slice(0, 5).map((s: Stock) => ({ ...s, coreScore: 90, elasticity: "高弹性" })),
-                    followers: sorted.filter((s: Stock) => s.change >= 0 && s.change <= 5).slice(0, 5).map((s: Stock) => ({ ...s, coreScore: 70, elasticity: "中性" })),
-                    declining: sorted.filter((s: Stock) => s.change < 0).slice(0, 5).map((s: Stock) => ({ ...s, coreScore: 50, elasticity: "防守" }))
-                };
-            }
-
             setData(json);
-            setLoading(false);
+            setError(null);
         } catch (err) {
             console.error(err);
+            setError('实时行业数据加载失败，请稍后重试。');
+        } finally {
             setLoading(false);
         }
-    };
+    }, [chainName]);
 
     useEffect(() => {
         fetchData();
-        const interval = setInterval(fetchData, 5000);
+        const interval = setInterval(fetchData, 30000);
         return () => clearInterval(interval);
-    }, [chainName]);
+    }, [fetchData]);
 
     if (loading && !data) {
         return (
@@ -383,18 +309,35 @@ export default function ChainDetailPage() {
         );
     }
 
-    if (!data) return null;
+    if (!data) {
+        return (
+            <div className="min-h-screen bg-[var(--bg-primary)] p-4 flex items-center justify-center">
+                <div className="text-center">
+                    <div className="text-sm text-red-400 mb-2">{error || '行业详情暂时不可用'}</div>
+                    <button onClick={() => fetchData()} className="btn btn-secondary">重试</button>
+                </div>
+            </div>
+        );
+    }
+
+    const overview = data.overview;
+    const changeColor = (overview?.sectorChange || 0) >= 0 ? 'text-[var(--accent-green)]' : 'text-[var(--accent-red)]';
+    const sourceLabel = data.dataSource?.sector === 'sector_detail'
+        ? '实时板块成分股'
+        : data.dataSource?.sector === 'theme_fallback_quotes'
+            ? '主题映射实时股价'
+            : '当前未拿到实时成分股';
 
     return (
         <div className="min-h-screen bg-[var(--bg-primary)] pb-24">
             {/* Navbar */}
             <nav className="sticky top-0 z-50 bg-[var(--bg-primary)]/90 backdrop-blur border-b border-[var(--border-color)] px-4 py-3 flex justify-between items-center">
                 <button onClick={() => router.back()} className="text-[var(--text-secondary)] hover:text-[var(--text-primary)] flex items-center gap-1">
-                    ← <span className="text-sm">返回 {data.name}产业链</span>
+                    ← <span className="text-sm">返回 {data.name}深度分析</span>
                 </button>
                 <div className="flex gap-2">
-                    <span className="px-2 py-0.5 bg-orange-500/20 text-orange-400 text-xs rounded">🔥 量价齐升</span>
-                    <span className="px-2 py-0.5 bg-green-500/20 text-green-400 text-xs rounded">✅ 长期趋势</span>
+                    <span className="px-2 py-0.5 bg-orange-500/20 text-orange-400 text-xs rounded">{overview?.stage || '观察期'}</span>
+                    <span className="px-2 py-0.5 bg-cyan-500/20 text-cyan-400 text-xs rounded">{sourceLabel}</span>
                 </div>
             </nav>
 
@@ -404,43 +347,89 @@ export default function ChainDetailPage() {
                 <section className="card bg-gradient-to-br from-[var(--bg-secondary)] to-[var(--bg-primary)] border border-[var(--border-color)] p-5">
                     <div className="flex justify-between items-start">
                         <div>
-                            <div className={`text-4xl font-bold mb-1 ${data.avgChange >= 0 ? 'text-[var(--accent-green)]' : 'text-[var(--accent-red)]'}`}>
-                                {data.price?.toLocaleString()}
+                            <div className={`text-4xl font-bold mb-1 ${changeColor}`}>
+                                {(overview?.sectorChange || 0) >= 0 ? '+' : ''}{(overview?.sectorChange || 0).toFixed(2)}%
                             </div>
                             <div className="text-sm text-[var(--text-secondary)]">
-                                {data.name}现货价
+                                {data.name}板块即时涨幅
                             </div>
                         </div>
                         <div className="text-right">
-                            <div className={`text-xl font-bold mb-1 ${data.avgChange >= 0 ? 'text-[var(--accent-green)]' : 'text-[var(--accent-red)]'}`}>
-                                +{data.avgChange}%/月
+                            <div className="text-xl font-bold mb-1 text-[var(--text-primary)]">
+                                {data.count > 0 ? `${overview?.positiveCount || 0}/${data.count}` : '暂无'}
                             </div>
                             <div className="text-xs text-[var(--text-secondary)]">
-                                量能 {data.volumeMultiplier}倍
+                                {data.count > 0 ? '上涨家数' : '成分股数据'}
+                            </div>
+                        </div>
+                    </div>
+                    <div className="mt-4 grid grid-cols-3 gap-3 text-xs">
+                        <div className="rounded-lg bg-[var(--bg-secondary)]/40 px-3 py-2">
+                            <div className="text-[var(--text-secondary)] mb-1">前排均价</div>
+                            <div className="text-[var(--text-primary)] font-semibold">
+                                {overview?.leaderAveragePrice ? overview.leaderAveragePrice.toFixed(2) : '--'}
+                            </div>
+                        </div>
+                        <div className="rounded-lg bg-[var(--bg-secondary)]/40 px-3 py-2">
+                            <div className="text-[var(--text-secondary)] mb-1">平均换手</div>
+                            <div className="text-[var(--text-primary)] font-semibold">
+                                {(overview?.turnover || 0).toFixed(2)}%
+                            </div>
+                        </div>
+                        <div className="rounded-lg bg-[var(--bg-secondary)]/40 px-3 py-2">
+                            <div className="text-[var(--text-secondary)] mb-1">龙头强度</div>
+                            <div className="text-[var(--text-primary)] font-semibold">
+                                {(overview?.leaderTurnoverRatio || 1).toFixed(2)}x
                             </div>
                         </div>
                     </div>
                     {/* Stage Bar */}
                     <div className="mt-4 flex items-center gap-2">
-                        <span className="text-xs px-2 py-0.5 bg-green-500 text-black font-bold rounded">启动期</span>
+                        <span className="text-xs px-2 py-0.5 bg-green-500 text-black font-bold rounded">{overview?.stage || '观察期'}</span>
                         <div className="flex-1 h-1.5 bg-[var(--bg-primary)] rounded-full overflow-hidden">
-                            <div className="h-full bg-green-500 w-[78%]"></div>
+                            <div className="h-full bg-green-500" style={{ width: `${overview?.confidence || 0}%` }}></div>
                         </div>
-                        <span className="text-xs text-[var(--text-secondary)]">置信度 78%</span>
+                        <span className="text-xs text-[var(--text-secondary)]">置信度 {overview?.confidence || 0}%</span>
                     </div>
                 </section>
+
+                {data.count === 0 && (
+                    <section className="card border border-yellow-500/20 bg-yellow-500/5">
+                        <div className="text-sm font-medium text-yellow-300 mb-1">当前未拿到实时成分股</div>
+                        <div className="text-sm text-[var(--text-secondary)] leading-relaxed">
+                            这个页面已经不再填充 mock 数据。若数据源暂时不可用，会明确保留空态和观察结论；等数据源恢复后，成分股、结构拆解和情绪分组会自动更新为真实数据。
+                        </div>
+                    </section>
+                )}
 
                 {/* Logic Verification */}
                 <LogicCard logic={data.logic} />
 
                 {/* Six Dimensions */}
-                <SixDimensionsCard scores={data.scores} />
+                <SixDimensionsCard dimensions={data.dimensions} />
 
-                {/* 🔗 Industry Chain Analysis (1:1 Restoration) */}
+                {/* 新闻证据 */}
+                {data.news && data.news.length > 0 && (
+                    <section className="card border border-[var(--border-color)] bg-[var(--bg-secondary)]/20">
+                        <div className="flex items-center gap-2 mb-3">
+                            <span className="text-sm font-medium text-[var(--text-primary)]">📰 新闻证据</span>
+                        </div>
+                        <div className="space-y-2">
+                            {data.news.map((item, idx) => (
+                                <div key={`${item.title}-${idx}`} className="rounded-lg bg-[var(--bg-secondary)]/40 p-3">
+                                    <div className="text-sm text-[var(--text-primary)] leading-relaxed">{item.title}</div>
+                                    <div className="mt-1 text-xs text-[var(--text-secondary)]">{item.source} · {item.time || '实时'}</div>
+                                </div>
+                            ))}
+                        </div>
+                    </section>
+                )}
+
+                {/* 板块结构分析 */}
                 {data.chainStructure && data.chainStructure.length > 0 && (
                     <section className="space-y-4">
                         <div className="flex items-center gap-2 mb-2">
-                            <span className="text-sm font-medium text-[var(--text-secondary)]">🔗 产业链分析</span>
+                            <span className="text-sm font-medium text-[var(--text-secondary)]">🔗 板块结构分析</span>
                         </div>
 
                         {/* Iterating Segments */}
@@ -517,6 +506,18 @@ export default function ChainDetailPage() {
                         </div>
                         <MarketSentimentTabs groups={data.groups} />
                     </div>
+                )}
+
+                {data.dataSource && (
+                    <section className="card border border-[var(--border-color)] bg-[var(--bg-secondary)]/20">
+                        <div className="text-sm font-medium text-[var(--text-primary)] mb-2">数据说明</div>
+                        <div className="text-sm text-[var(--text-secondary)] leading-relaxed">
+                            当前页面使用的是
+                            <span className="text-[var(--text-primary)]"> {sourceLabel} </span>
+                            生成的结构分析，不再使用前端 mock 占位值。
+                            {data.dataSource.hotSectorMatched && data.dataSource.matchedSectorName ? ` 已命中实时热板块：${data.dataSource.matchedSectorName}。` : ' 当前未命中热板块榜单，逻辑以成分股分布为主。'}
+                        </div>
+                    </section>
                 )}
 
             </main>

@@ -35,6 +35,8 @@ export interface BtcSummary {
   volume24h?: number;
   fearGreed: number;
   fearGreedLabel: string;
+  source?: string;
+  stale?: boolean;
   strategy?: BtcStrategy;
 }
 
@@ -192,6 +194,8 @@ export interface BtcStrategyCard {
 export interface StockMarket {
   status: 'bull' | 'neutral' | 'bear' | 'bullish' | 'bearish';
   canOperate: boolean;
+  stale?: boolean;
+  summary?: string;
   index: {
     name: string;
     value: number;
@@ -201,6 +205,7 @@ export interface StockMarket {
   volume: number;
   northFlow: number;
   limitUp: number;
+  limitDown?: number;
 }
 
 export interface StockSignal {
@@ -266,6 +271,29 @@ export interface MacroDashboard {
   operational_logic: string;
   confidence_score?: 'High' | 'Medium' | 'Low';
   trending?: TrendingItem[];
+  engine?: {
+    provider: string;
+    model: string;
+    used_api: boolean;
+    fallback_reason?: string;
+  };
+}
+
+export interface ChatCompletionRequest {
+  messages: Array<{
+    role: 'system' | 'user' | 'assistant';
+    content: string;
+  }>;
+  provider?: string;
+  api_key?: string;
+  model?: string;
+}
+
+export interface ChatCompletionResponse {
+  reply: string;
+  provider: string;
+  model: string;
+  used_api: boolean;
 }
 
 // ============================================
@@ -286,6 +314,7 @@ export interface CommanderWeather {
     high_open: number;
     low_open: number;
   };
+  stale?: boolean;
 }
 
 export interface CommanderReview {
@@ -321,6 +350,12 @@ export interface CommanderStock {
 
 export interface CommanderOrder {
   timestamp: string;
+  context: {
+    current_phase: string;
+    label: string;
+    action_now: string;
+    market_clock: string;
+  };
   battle_weather: CommanderWeather;
   yesterday_review: CommanderReview;
   today_mainlines: {
@@ -339,6 +374,16 @@ export interface CommanderOrder {
       cash: number;
     };
     position_text: string;
+    current_phase?: string;
+    phase_label?: string;
+    action_now?: string;
+    risk_flags?: string[];
+    execution_windows?: Array<{
+      phase: string;
+      title: string;
+      objective: string;
+      command: string;
+    }>;
     time_orders: Array<{
       time: string;
       condition: string;
@@ -346,6 +391,82 @@ export interface CommanderOrder {
     }>;
     focus: string;
   };
+}
+
+export interface CommanderSummary {
+  timestamp: string;
+  weather: CommanderWeather;
+  review: CommanderReview;
+  mainlines: {
+    logic_a: CommanderLogic;
+    logic_b: CommanderLogic;
+    summary: string;
+  };
+  current_phase?: string;
+  phase_label?: string;
+  action_now?: string;
+  position: {
+    attack: number;
+    defense: number;
+    cash: number;
+  };
+  position_text: string;
+  focus: string;
+  recommended_stocks: {
+    attack: CommanderStock[];
+    defense: CommanderStock[];
+  };
+  recent_accuracy: {
+    accuracy: number;
+    total: number;
+    correct: number;
+    days: number;
+  };
+  recent_records: Array<{
+    date: string;
+    logic_a?: CommanderLogic;
+    logic_b?: CommanderLogic;
+    verified: boolean;
+    verify_result?: {
+      accuracy: number;
+    };
+  }>;
+}
+
+export interface CommanderHistoryRecord {
+  date: string;
+  logic_a?: CommanderLogic;
+  logic_b?: CommanderLogic;
+  verified: boolean;
+  verify_result?: {
+    total: number;
+    correct: number;
+    accuracy: number;
+    stocks?: Array<{
+      code: string;
+      name: string;
+      change: number;
+      result: string;
+    }>;
+  };
+}
+
+export interface CommanderReviewDetail {
+  date: string;
+  logic_a?: CommanderLogic;
+  logic_b?: CommanderLogic;
+  verified: boolean;
+  verify_result?: {
+    total: number;
+    correct: number;
+    accuracy: number;
+    stocks?: Array<{
+      code: string;
+      name: string;
+      change: number;
+      result: string;
+    }>;
+  } | null;
 }
 
 export interface TrendingItem {
