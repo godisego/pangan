@@ -146,6 +146,15 @@ AI_PROVIDERS: Dict[str, ProviderConfig] = {
     },
 }
 
+SHARED_PROVIDER_PREFERENCE = [
+    "zhipu",
+    "dashscope",
+    "minimax",
+    "openai",
+    "anthropic",
+    "gemini",
+]
+
 
 def normalize_provider(provider: Optional[str]) -> Optional[str]:
     candidate = (provider or "").strip().lower()
@@ -208,3 +217,35 @@ def get_public_provider_catalog() -> Dict[str, List[ProviderConfig]]:
         }
         providers.append(item)
     return {"providers": providers}
+
+
+def get_shared_ai_runtime() -> Dict[str, Any]:
+    explicit_provider = normalize_provider(os.getenv("SHARED_AI_PROVIDER"))
+    chosen_provider: Optional[str] = None
+
+    if explicit_provider and resolve_provider_api_key(explicit_provider):
+        chosen_provider = explicit_provider
+    else:
+        for provider_id in SHARED_PROVIDER_PREFERENCE:
+            if resolve_provider_api_key(provider_id):
+                chosen_provider = provider_id
+                break
+
+    if not chosen_provider:
+        return {
+            "enabled": False,
+            "provider": None,
+            "provider_label": None,
+            "model": None,
+        }
+
+    config = get_provider_config(chosen_provider) or {}
+    model_override = (os.getenv("SHARED_AI_MODEL") or "").strip() or None
+    resolved_model = resolve_provider_model(chosen_provider, model_override)
+
+    return {
+        "enabled": True,
+        "provider": chosen_provider,
+        "provider_label": config.get("label"),
+        "model": resolved_model,
+    }

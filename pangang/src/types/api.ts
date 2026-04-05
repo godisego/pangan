@@ -331,6 +331,16 @@ export interface ChatProviderOption {
 
 export interface ChatProviderCatalogResponse {
   providers: ChatProviderOption[];
+  shared_ai?: {
+    enabled: boolean;
+    provider?: string | null;
+    provider_label?: string | null;
+    model?: string | null;
+  };
+  features?: {
+    notify_config_write_enabled?: boolean;
+    notify_test_enabled?: boolean;
+  };
 }
 
 export interface ChatCompletionRequest {

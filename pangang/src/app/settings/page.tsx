@@ -7,7 +7,7 @@ import ModuleShell from '@/components/ModuleShell';
 import { chatApi } from '@/lib/api';
 import { FALLBACK_AI_PROVIDERS, getProviderById } from '@/lib/aiProviders';
 import { defaultSettings, loadUserSettings, saveUserSettings, type UserSettings } from '@/lib/localSettings';
-import type { ChatProviderOption } from '@/types/api';
+import type { ChatProviderCatalogResponse, ChatProviderOption } from '@/types/api';
 import { API_CONFIG } from '@/utils/constants';
 
 type MessageState = { type: '' | 'success' | 'error' | 'info'; text: string };
@@ -129,6 +129,7 @@ function StepCard({
 export default function SettingsPage() {
   const [settings, setSettings] = useState<UserSettings>(defaultSettings);
   const [providerOptions, setProviderOptions] = useState<ChatProviderOption[]>(FALLBACK_AI_PROVIDERS);
+  const [runtimeCatalog, setRuntimeCatalog] = useState<ChatProviderCatalogResponse | null>(null);
   const [savedSignature, setSavedSignature] = useState(JSON.stringify(defaultSettings));
   const [msg, setMsg] = useState<MessageState>({ type: '', text: '' });
   const [pendingAction, setPendingAction] = useState<'' | 'save' | 'test' | 'daily' | 'ai-test'>('');
@@ -141,6 +142,7 @@ export default function SettingsPage() {
 
     void chatApi.getProviders()
       .then((catalog) => {
+        setRuntimeCatalog(catalog);
         if (!catalog.providers?.length) return;
         setProviderOptions(catalog.providers);
         setSettings((prev) => normalizeAiSettings(prev, catalog.providers));
@@ -153,6 +155,15 @@ export default function SettingsPage() {
         // 保持本地兜底清单即可，避免设置页空白
       });
   }, []);
+
+  const sharedAi = runtimeCatalog?.shared_ai;
+  const notifyConfigWriteEnabled = runtimeCatalog?.features?.notify_config_write_enabled ?? true;
+  const notifyTestEnabled = runtimeCatalog?.features?.notify_test_enabled ?? true;
+  const sharedProvider = sharedAi?.provider ? getProviderById(sharedAi.provider, providerOptions) : null;
+  const hasLocalAiConfig = Boolean(
+    settings.ai.apiKey.trim() &&
+      (getProviderById(settings.ai.provider, providerOptions).requires_base_url ? settings.ai.baseUrl.trim() : true)
+  );
 
   const summarizeNotifyResult = (json: NotifyResponse, fallbackPrefix: string) => {
     const results = json?.results;
@@ -193,16 +204,13 @@ export default function SettingsPage() {
     const providerForStatus = getProviderById(settings.ai.provider, providerOptions);
 
     return {
-      aiReady: Boolean(
-        settings.ai.apiKey.trim() &&
-          (providerForStatus.requires_base_url ? settings.ai.baseUrl.trim() : true)
-      ),
+      aiReady: hasLocalAiConfig || Boolean(sharedAi?.enabled),
       pushReady: channelCount > 0,
       channelCount,
       scheduleText: settings.preferences.enablePush ? settings.preferences.pushTime : '关闭',
       saveState: JSON.stringify(settings) === savedSignature ? '已同步' : '未保存',
     };
-  }, [settings, savedSignature, providerOptions]);
+  }, [hasLocalAiConfig, savedSignature, settings, providerOptions, sharedAi?.enabled]);
 
   const selectedProvider = getProviderById(settings.ai.provider, providerOptions);
   const matchesKnownModel = selectedProvider.models.some((model) => model.id === settings.ai.model);
@@ -231,6 +239,12 @@ export default function SettingsPage() {
     setPendingAction('save');
     saveUserSettings(settings);
     setSavedSignature(JSON.stringify(settings));
+
+    if (!notifyConfigWriteEnabled) {
+      setMsg({ type: 'success', text: '本地偏好已保存。当前共享部署已关闭远程通知配置写入。' });
+      setPendingAction('');
+      return;
+    }
 
     try {
       const res = await fetch(`${API_CONFIG.BASE_URL}/api/notify/config`, {
@@ -266,19 +280,26 @@ export default function SettingsPage() {
   };
 
   const handleAiTest = async () => {
-    if (!settings.ai.apiKey.trim()) {
-      setMsg({ type: 'error', text: '请先填写当前提供商对应的 API Key。' });
+    if (!hasLocalAiConfig && !sharedAi?.enabled) {
+      setMsg({ type: 'error', text: '当前既没有本地 AI Key，也没有可用的平台共享 AI。' });
       return;
     }
 
     try {
       setPendingAction('ai-test');
       setMsg({ type: 'info', text: '正在验证 AI 配置...' });
+      const testProvider = hasLocalAiConfig
+        ? settings.ai.provider
+        : sharedAi?.provider || settings.ai.provider;
+      const testModel = hasLocalAiConfig
+        ? settings.ai.model
+        : sharedAi?.model || settings.ai.model;
+      const providerConfig = getProviderById(testProvider, providerOptions);
       const result = await chatApi.testConfig({
-        provider: settings.ai.provider,
-        api_key: settings.ai.apiKey,
-        model: settings.ai.model,
-        base_url: selectedProvider.requires_base_url ? settings.ai.baseUrl || undefined : undefined,
+        provider: testProvider,
+        api_key: hasLocalAiConfig ? settings.ai.apiKey : undefined,
+        model: testModel,
+        base_url: hasLocalAiConfig && providerConfig.requires_base_url ? settings.ai.baseUrl || undefined : undefined,
       });
       setMsg({
         type: 'success',
@@ -293,6 +314,10 @@ export default function SettingsPage() {
   };
 
   const handleTest = async () => {
+    if (!notifyTestEnabled) {
+      setMsg({ type: 'info', text: '当前共享部署已关闭远程通知测试。通知由站点拥有者在服务端统一配置。' });
+      return;
+    }
     const hasAnyChannel = Boolean(
       settings.notifications.feishuWebhook ||
         settings.notifications.wecomWebhook ||
@@ -336,6 +361,10 @@ export default function SettingsPage() {
   };
 
   const handleDailyTest = async () => {
+    if (!notifyTestEnabled) {
+      setMsg({ type: 'info', text: '当前共享部署已关闭远程日报触发测试。请由站点拥有者通过服务端密钥或 GitHub Actions 触发。' });
+      return;
+    }
     const hasAnyChannel = Boolean(
       settings.notifications.feishuWebhook ||
         settings.notifications.wecomWebhook ||
@@ -552,12 +581,31 @@ export default function SettingsPage() {
             </Field>
           ) : null}
 
+          {sharedAi?.enabled ? (
+            <div className="rounded-[18px] border border-[rgba(105,231,176,0.22)] bg-[rgba(105,231,176,0.08)] px-4 py-3 text-sm leading-6 text-[var(--text-secondary)]">
+              当前站点已启用平台共享 AI：
+              {' '}
+              {sharedProvider?.label || sharedAi.provider_label || sharedAi.provider}
+              {' '}
+              ·
+              {' '}
+              {sharedAi.model || '默认模型'}
+              。你和朋友们不填写个人 API Key 也能直接使用聊天和趋势分析；只有你想覆盖成自己的模型配置时，才需要填写个人 Key。
+            </div>
+          ) : null}
+
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-[18px] border border-[var(--border-color)] bg-[rgba(255,255,255,0.02)] px-4 py-3">
             <div className="text-sm text-[var(--text-secondary)]">
-              当前选择：{selectedProvider.label} · {settings.ai.model || selectedProvider.default_model}
+              当前选择：
+              {' '}
+              {hasLocalAiConfig
+                ? `${selectedProvider.label} · ${settings.ai.model || selectedProvider.default_model}`
+                : sharedAi?.enabled
+                  ? `${sharedProvider?.label || sharedAi.provider_label || sharedAi.provider} · ${sharedAi.model || '默认模型'}`
+                  : `${selectedProvider.label} · ${settings.ai.model || selectedProvider.default_model}`}
             </div>
             <button onClick={() => void handleAiTest()} className="btn btn-secondary px-4 py-2 text-sm">
-              {pendingAction === 'ai-test' ? '验证中...' : '测试 AI 配置'}
+              {pendingAction === 'ai-test' ? '验证中...' : sharedAi?.enabled && !hasLocalAiConfig ? '测试平台 AI' : '测试 AI 配置'}
             </button>
           </div>
         </ModuleShell>
@@ -571,7 +619,9 @@ export default function SettingsPage() {
           motion="scan"
         >
           <div className="rounded-[18px] border border-[var(--border-color)] bg-[rgba(255,255,255,0.02)] px-4 py-3 text-sm text-[var(--text-secondary)]">
-            飞书、企微、Telegram 三选一即可。Telegram 需要 `Bot Token + 数字 Chat ID`，不是机器人用户名。
+            {notifyConfigWriteEnabled
+              ? '飞书、企微、Telegram 三选一即可。Telegram 需要 `Bot Token + 数字 Chat ID`，不是机器人用户名。'
+              : '当前共享部署已关闭远程通知配置写入。建议由站点拥有者在服务端环境变量里统一配置通知，朋友端只保留 AI 与浏览能力。'}
           </div>
 
           <div className="grid gap-4">
@@ -580,6 +630,7 @@ export default function SettingsPage() {
                 <input
                   type="text"
                   className={inputClassName}
+                  disabled={!notifyConfigWriteEnabled}
                   placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/xxxxxxxx"
                   value={settings.notifications.feishuWebhook}
                   onChange={(e) =>
@@ -595,6 +646,7 @@ export default function SettingsPage() {
                 <input
                   type="text"
                   className={inputClassName}
+                  disabled={!notifyConfigWriteEnabled}
                   placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxxxxxxx"
                   value={settings.notifications.wecomWebhook}
                   onChange={(e) =>
@@ -612,6 +664,7 @@ export default function SettingsPage() {
                 <input
                   type="password"
                   className={inputClassName}
+                  disabled={!notifyConfigWriteEnabled}
                   placeholder="123456789:AAExampleMockToken"
                   value={settings.notifications.telegramBotToken}
                   onChange={(e) =>
@@ -627,6 +680,7 @@ export default function SettingsPage() {
                 <input
                   type="text"
                   className={inputClassName}
+                  disabled={!notifyConfigWriteEnabled}
                   placeholder="例如 123456789"
                   value={settings.notifications.telegramChatId}
                   onChange={(e) =>
@@ -644,6 +698,7 @@ export default function SettingsPage() {
                 <input
                   type="text"
                   className={inputClassName}
+                  disabled={!notifyConfigWriteEnabled}
                   placeholder="https://api.telegram.org"
                   value={settings.notifications.telegramApiBase}
                   onChange={(e) =>
@@ -659,6 +714,7 @@ export default function SettingsPage() {
                 <input
                   type="text"
                   className={inputClassName}
+                  disabled={!notifyConfigWriteEnabled}
                   placeholder="socks5h://127.0.0.1:7892"
                   value={settings.notifications.telegramProxyUrl}
                   onChange={(e) =>
@@ -760,17 +816,27 @@ export default function SettingsPage() {
 
             <div className="grid gap-3">
               <button onClick={() => void handleSave()} className="btn btn-primary px-5 py-4 text-base">
-                {pendingAction === 'save' ? '正在保存...' : '保存并同步配置'}
+                {pendingAction === 'save' ? '正在保存...' : notifyConfigWriteEnabled ? '保存并同步配置' : '保存本地偏好'}
               </button>
-              <button onClick={() => void handleTest()} className="btn btn-secondary px-5 py-4 text-base">
+              <button
+                onClick={() => void handleTest()}
+                className="btn btn-secondary px-5 py-4 text-base"
+                disabled={!notifyTestEnabled}
+              >
                 {pendingAction === 'test' ? '正在测试...' : '测试所有通道'}
               </button>
-              <button onClick={() => void handleDailyTest()} className="btn btn-secondary px-5 py-4 text-base">
+              <button
+                onClick={() => void handleDailyTest()}
+                className="btn btn-secondary px-5 py-4 text-base"
+                disabled={!notifyTestEnabled}
+              >
                 {pendingAction === 'daily' ? '正在发送...' : '手动触发今日早报'}
               </button>
 
               <div className="rounded-[18px] border border-[var(--border-color)] bg-[rgba(255,255,255,0.02)] px-4 py-3 text-sm leading-6 text-[var(--text-secondary)]">
-                保存后会同时写入本地与后端通知配置。测试按钮会直接验证当前通道，早报按钮会立即生成一条完整日报。
+                {notifyConfigWriteEnabled
+                  ? '保存后会同时写入本地与后端通知配置。测试按钮会直接验证当前通道，早报按钮会立即生成一条完整日报。'
+                  : '当前部署建议把通知能力视为“站点拥有者专用”。朋友端只需要共享 AI 选股、趋势判断和看盘结果即可。'}
               </div>
             </div>
           </div>

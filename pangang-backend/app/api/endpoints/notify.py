@@ -20,6 +20,18 @@ def verify_trigger_secret(trigger_secret: Optional[str]) -> None:
         raise HTTPException(status_code=401, detail="Invalid trigger secret")
 
 
+def ensure_public_notify_config_enabled() -> None:
+    allow_write = (os.getenv("ALLOW_PUBLIC_NOTIFY_CONFIG", "true") or "true").lower() == "true"
+    if not allow_write:
+        raise HTTPException(status_code=403, detail="Remote notification config is disabled for this deployment")
+
+
+def ensure_public_notify_test_enabled() -> None:
+    allow_test = (os.getenv("ALLOW_PUBLIC_NOTIFY_TEST", "true") or "true").lower() == "true"
+    if not allow_test:
+        raise HTTPException(status_code=403, detail="Remote notification testing is disabled for this deployment")
+
+
 class ChannelConfig(BaseModel):
     feishu_webhook: str = ""
     wecom_webhook: str = ""
@@ -59,6 +71,7 @@ async def get_config():
 
 @router.post("/config")
 async def save_config(req: NotifyConfigRequest):
+    ensure_public_notify_config_enabled()
     payload = {
         "channels": req.channels.model_dump() if hasattr(req.channels, "model_dump") else req.channels.dict(),
         "schedule": req.schedule.model_dump() if hasattr(req.schedule, "model_dump") else req.schedule.dict(),
@@ -72,6 +85,7 @@ async def save_config(req: NotifyConfigRequest):
 
 @router.post("/test")
 async def test_push(req: PushRequest):
+    ensure_public_notify_test_enabled()
     overrides = None
     if req.config:
         overrides = req.config.model_dump() if hasattr(req.config, "model_dump") else req.config.dict()

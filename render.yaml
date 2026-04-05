@@ -18,6 +18,14 @@ services:
         value: "Asia/Shanghai"
       - key: DAILY_REPORT_TRIGGER_SECRET
         sync: false
+      - key: SHARED_AI_PROVIDER
+        value: "zhipu"
+      - key: SHARED_AI_MODEL
+        value: "glm-4.7-flash"
+      - key: ALLOW_PUBLIC_NOTIFY_CONFIG
+        value: "false"
+      - key: ALLOW_PUBLIC_NOTIFY_TEST
+        value: "false"
       - key: TUSHARE_TOKEN
         sync: false
       - key: ZHIPUAI_API_KEY

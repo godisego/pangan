@@ -105,12 +105,16 @@ DAILY_PUSH_TIME=08:00
 DAILY_PUSH_TIMEZONE=Asia/Shanghai
 DAILY_REPORT_TRIGGER_SECRET=
 TUSHARE_TOKEN=
+SHARED_AI_PROVIDER=zhipu
+SHARED_AI_MODEL=glm-4.7-flash
 ZHIPUAI_API_KEY=
 OPENAI_API_KEY=
 ANTHROPIC_API_KEY=
 GEMINI_API_KEY=
 DASHSCOPE_API_KEY=
 MINIMAX_API_KEY=
+ALLOW_PUBLIC_NOTIFY_CONFIG=false
+ALLOW_PUBLIC_NOTIFY_TEST=false
 FEISHU_WEBHOOK=
 WECOM_WEBHOOK=
 TELEGRAM_BOT_TOKEN=
@@ -124,8 +128,11 @@ TELEGRAM_PROXY_URL=
 - `FRONTEND_URL`: 后端 CORS 和日报跳转链接使用，生产环境填 Vercel 域名
 - `ENABLE_DAILY_SCHEDULER=false`: 免费部署时建议关闭内置 scheduler，改用 GitHub Actions
 - `DAILY_REPORT_TRIGGER_SECRET`: 给定时日报接口增加一层简单鉴权
+- `SHARED_AI_PROVIDER` / `SHARED_AI_MODEL`: 给共享部署指定平台统一 AI，朋友不填个人 Key 也能直接聊天和看趋势
 - `TUSHARE_TOKEN`: 可选增强项，不填也能运行
-- 各种 AI Key 都是可选项，不填时前端仍可运行，只是聊天能力需要用户自己配置
+- 各种 AI Key 都是可选项；如果你配置了平台级 AI Key，朋友端可以直接走共享 AI
+- `ALLOW_PUBLIC_NOTIFY_CONFIG=false`: 推荐共享部署关闭远程通知配置，避免朋友改掉全站通知
+- `ALLOW_PUBLIC_NOTIFY_TEST=false`: 推荐共享部署关闭前端通知测试，只保留你自己的服务端触发链路
 
 ## 开源模式说明
 
@@ -170,8 +177,13 @@ TELEGRAM_PROXY_URL=
 
    - `FRONTEND_URL=https://你的-vercel-域名`
    - `DAILY_REPORT_TRIGGER_SECRET=你自己生成的一串随机字符串`
+   - `SHARED_AI_PROVIDER=zhipu`
+   - `SHARED_AI_MODEL=glm-4.7-flash`
+   - `ZHIPUAI_API_KEY=你的平台统一 AI Key`
+   - `ALLOW_PUBLIC_NOTIFY_CONFIG=false`
+   - `ALLOW_PUBLIC_NOTIFY_TEST=false`
    - `TUSHARE_TOKEN=` 可选
-   - 各类 AI Key / 通知 Webhook 可选
+   - 各类通知 Webhook 可选
 
 #### 方式 B：手动创建 Web Service
 
@@ -191,6 +203,11 @@ TELEGRAM_PROXY_URL=
 - `DAILY_PUSH_TIMEZONE=Asia/Shanghai`
 - `FRONTEND_URL=https://你的-vercel-域名`
 - `DAILY_REPORT_TRIGGER_SECRET=随机密钥`
+- `SHARED_AI_PROVIDER=zhipu`
+- `SHARED_AI_MODEL=glm-4.7-flash`
+- `ZHIPUAI_API_KEY=你的平台统一 AI Key`
+- `ALLOW_PUBLIC_NOTIFY_CONFIG=false`
+- `ALLOW_PUBLIC_NOTIFY_TEST=false`
 
 后端部署成功后，先记录你的 Render 地址，例如：
 

@@ -3,9 +3,9 @@
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { chatApi, commanderApi } from '@/lib/api';
-import { getProviderLabel } from '@/lib/aiProviders';
+import { getProviderById, getProviderLabel } from '@/lib/aiProviders';
 import { defaultSettings, loadUserSettings, type UserSettings } from '@/lib/localSettings';
-import type { CommanderSummary } from '@/types/api';
+import type { ChatProviderCatalogResponse, CommanderSummary } from '@/types/api';
 
 type MessageRole = 'user' | 'assistant';
 
@@ -24,6 +24,11 @@ interface ChatSession {
 }
 
 const CHAT_STORAGE_KEY = 'pangang_chat_sessions_v2';
+const QUICK_PROMPTS = [
+  { label: '看今天', prompt: '结合当前作战上下文，先给我一句结论：今天更偏进攻还是防守？然后给出理由、验证点和证伪点。' },
+  { label: 'AI 选股', prompt: '结合当前主线、市场过滤器和推荐股票池，给我 3 只今天最值得跟踪的股票，并分别说清楚原因、买点关注项和风险。' },
+  { label: '盯趋势', prompt: '如果我今天只做一件事，你建议我重点盯什么趋势？请按“先看什么，再看什么，什么信号出现就行动”的格式回答。' },
+];
 
 const navLinks = [
   { href: '/', label: '总览' },
@@ -180,6 +185,7 @@ function buildContextPrompt(summary?: CommanderSummary | null) {
 
 export default function ChatPage() {
   const [settings, setSettings] = useState<UserSettings>(defaultSettings);
+  const [runtimeCatalog, setRuntimeCatalog] = useState<ChatProviderCatalogResponse | null>(null);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState('');
   const [input, setInput] = useState('');
@@ -200,6 +206,14 @@ export default function ChatPage() {
     setSessions(initialSessions);
     setCurrentSessionId(initialSessions[0].id);
     setIsReady(true);
+
+    void chatApi.getProviders()
+      .then((catalog) => {
+        setRuntimeCatalog(catalog);
+      })
+      .catch(() => {
+        // keep chat usable with local settings only
+      });
   }, []);
 
   useEffect(() => {
@@ -251,8 +265,24 @@ export default function ChatPage() {
 
   const currentSession = sessions.find((session) => session.id === currentSessionId) ?? sessions[0] ?? null;
   const messages = currentSession?.messages ?? [];
-  const aiReady = Boolean(settings.ai.apiKey.trim());
-  const providerLabel = getProviderLabel(settings.ai.provider);
+  const sharedAi = runtimeCatalog?.shared_ai;
+  const hasLocalAiKey = Boolean(settings.ai.apiKey.trim());
+  const activeProviderId = hasLocalAiKey
+    ? settings.ai.provider
+    : sharedAi?.enabled
+      ? sharedAi.provider || settings.ai.provider
+      : settings.ai.provider;
+  const activeProvider = getProviderById(
+    activeProviderId,
+    runtimeCatalog?.providers?.length ? runtimeCatalog.providers : undefined
+  );
+  const activeModel = hasLocalAiKey
+    ? settings.ai.model || activeProvider.default_model
+    : sharedAi?.enabled
+      ? sharedAi.model || activeProvider.default_model
+      : settings.ai.model || activeProvider.default_model;
+  const aiReady = hasLocalAiKey || Boolean(sharedAi?.enabled);
+  const providerLabel = getProviderLabel(activeProviderId);
 
   const createAndSelectSession = () => {
     const nextSession = createSession();
@@ -290,18 +320,19 @@ export default function ChatPage() {
     }));
   };
 
-  const handleSend = async () => {
-    if (!input.trim() || loadingSessionId || !currentSession) return;
+  const handleSend = async (overrideInput?: string) => {
+    const draft = (overrideInput ?? input).trim();
+    if (!draft || loadingSessionId || !currentSession) return;
 
     if (!aiReady) {
       appendAssistantMessage(
         currentSession.id,
-        '当前还没有可用的 AI Key。先去设置页完成模型配置，再回来发起真实对话。'
+        '当前站点还没有可用的 AI 能力。你可以去设置页填写个人 Key，或者让站点拥有者在服务端配置共享 AI。'
       );
       return;
     }
 
-    const outgoingContent = input.trim();
+    const outgoingContent = draft;
     const activeSessionId = currentSession.id;
     const userMessage: ChatMessage = {
       id: `msg-${Date.now()}`,
@@ -325,10 +356,10 @@ export default function ChatPage() {
 
     try {
       const response = await chatApi.send({
-        provider: settings.ai.provider || 'zhipu',
-        api_key: settings.ai.apiKey,
-        model: settings.ai.model || 'glm-4.7-flash',
-        base_url: settings.ai.provider === 'custom' ? settings.ai.baseUrl || undefined : undefined,
+        provider: activeProviderId || 'zhipu',
+        api_key: hasLocalAiKey ? settings.ai.apiKey : undefined,
+        model: activeModel || 'glm-4.7-flash',
+        base_url: hasLocalAiKey && activeProvider.requires_base_url ? settings.ai.baseUrl || undefined : undefined,
         messages: [
           {
             role: 'system',
@@ -453,9 +484,15 @@ export default function ChatPage() {
                   <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-[var(--text-muted)]">
                     <span>{providerLabel}</span>
                     <span>·</span>
-                    <span>{settings.ai.model || '未设置模型'}</span>
+                    <span>{activeModel || '未设置模型'}</span>
                     <span>·</span>
                     <span>{aiReady ? '已连接' : '待配置'}</span>
+                    {sharedAi?.enabled && !hasLocalAiKey ? (
+                      <>
+                        <span>·</span>
+                        <span className="text-[var(--accent-green)]">平台共享 AI</span>
+                      </>
+                    ) : null}
                   </div>
                 </div>
               </div>
@@ -473,11 +510,11 @@ export default function ChatPage() {
 
           {!aiReady ? (
             <div className="border-b border-[rgba(246,199,125,0.16)] bg-[rgba(246,199,125,0.08)] px-4 py-3 text-sm text-[var(--text-secondary)] md:px-6">
-              当前未配置可用的 AI Key。先去
+              当前未配置可用的 AI 能力。先去
               <Link href="/settings" className="mx-1 text-[var(--accent-gold)] underline decoration-transparent transition hover:decoration-inherit">
                 设置页
               </Link>
-              完成模型配置，再回来开始真实对话。
+              配置个人 Key，或在服务端启用共享 AI，再回来开始真实对话。
             </div>
           ) : null}
 
@@ -492,6 +529,9 @@ export default function ChatPage() {
                   <span className="text-xs text-[var(--text-muted)]">
                     主事件：{briefingContext.news_analysis?.lead_event || briefingContext.news_analysis?.headline}
                   </span>
+                ) : null}
+                {sharedAi?.enabled && !hasLocalAiKey ? (
+                  <span className="text-xs text-[var(--accent-green)]">当前使用平台共享 AI</span>
                 ) : null}
                 <button
                   type="button"
@@ -521,6 +561,18 @@ export default function ChatPage() {
                   </div>
                 ) : (
                   <>
+                    <div className="flex flex-wrap gap-2">
+                      {QUICK_PROMPTS.map((item) => (
+                        <button
+                          key={item.label}
+                          type="button"
+                          onClick={() => void handleSend(item.prompt)}
+                          className="btn btn-secondary px-3 py-2 text-xs"
+                        >
+                          {item.label}
+                        </button>
+                      ))}
+                    </div>
                     {messages.map((message) => (
                       <MessageBubble key={message.id} message={message} />
                     ))}
@@ -549,7 +601,7 @@ export default function ChatPage() {
                   value={input}
                   onChange={(event) => setInput(event.target.value)}
                   onKeyDown={handleKeyPress}
-                  placeholder="输入你的问题..."
+                  placeholder={aiReady ? '问主线、问个股、问证伪点，或直接点上面的快捷问题' : '先去设置页配置个人 Key，或启用平台共享 AI'}
                   className="min-h-[120px] w-full resize-none bg-transparent px-2 py-2 text-sm leading-7 text-[var(--text-primary)] outline-none placeholder:text-[var(--text-muted)]"
                   rows={5}
                 />

@@ -1,10 +1,10 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { macroApi } from '@/lib/api';
+import { chatApi, macroApi } from '@/lib/api';
 import { loadUserSettings } from '@/lib/localSettings';
 import { REFRESH_INTERVALS } from '@/utils/constants';
-import type { MacroDashboard } from '@/types/api';
+import type { ChatProviderCatalogResponse, MacroDashboard } from '@/types/api';
 
 function NewsRow({
   title,
@@ -62,6 +62,7 @@ function ThemeStrip({ themes }: { themes: string[] }) {
 
 export default function MacroStrategyDashboard({ className = '' }: { className?: string }) {
   const [macroData, setMacroData] = useState<MacroDashboard | null>(null);
+  const [runtimeCatalog, setRuntimeCatalog] = useState<ChatProviderCatalogResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -71,11 +72,13 @@ export default function MacroStrategyDashboard({ className = '' }: { className?:
 
     try {
       const settings = loadUserSettings();
+      const sharedAi = runtimeCatalog?.shared_ai;
+      const hasLocalAiKey = Boolean(settings.ai.apiKey.trim());
       const data = await macroApi.getDashboard({
-        provider: settings.ai.provider,
-        apiKey: settings.ai.apiKey,
-        model: settings.ai.model || 'glm-4.7-flash',
-        baseUrl: settings.ai.provider === 'custom' ? settings.ai.baseUrl || undefined : undefined,
+        provider: hasLocalAiKey ? settings.ai.provider : sharedAi?.provider || settings.ai.provider,
+        apiKey: hasLocalAiKey ? settings.ai.apiKey : undefined,
+        model: hasLocalAiKey ? settings.ai.model || 'glm-4.7-flash' : sharedAi?.model || settings.ai.model || 'glm-4.7-flash',
+        baseUrl: hasLocalAiKey && settings.ai.provider === 'custom' ? settings.ai.baseUrl || undefined : undefined,
       });
       setMacroData(data);
     } catch (err) {
@@ -83,6 +86,16 @@ export default function MacroStrategyDashboard({ className = '' }: { className?:
     } finally {
       setLoading(false);
     }
+  }, [runtimeCatalog]);
+
+  useEffect(() => {
+    void chatApi.getProviders()
+      .then((catalog) => {
+        setRuntimeCatalog(catalog);
+      })
+      .catch(() => {
+        // macro remains usable with local settings or backend defaults
+      });
   }, []);
 
   useEffect(() => {

@@ -2,7 +2,7 @@ from fastapi import APIRouter, Header, HTTPException
 from ..services.macro_analyzer import macro_analyzer
 import time
 from typing import Optional, Dict, Any
-from ..core.ai_provider_registry import normalize_provider
+from ..core.ai_provider_registry import get_shared_ai_runtime, normalize_provider
 
 router = APIRouter(tags=["macro"])
 
@@ -20,11 +20,12 @@ def _resolve_macro_overrides(
     model: Optional[str],
     base_url: Optional[str],
 ) -> Dict[str, Optional[str]]:
-    selected_provider = normalize_provider(provider) or "zhipu"
+    shared = get_shared_ai_runtime()
+    selected_provider = normalize_provider(provider) or shared.get("provider") or "zhipu"
     return {
         "provider": selected_provider,
         "api_key": api_key,
-        "model": model,
+        "model": model or (shared.get("model") if shared.get("provider") == selected_provider else None),
         "base_url": base_url,
     }
 
