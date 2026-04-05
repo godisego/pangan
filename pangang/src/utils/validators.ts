@@ -80,12 +80,13 @@ export function validateBtcTechnical(data: any): data is import('@/types/api').B
  * Validate BTC detail data
  */
 export function validateBtcDetail(data: any): data is BtcDetail {
+  const candidate = data as Partial<BtcDetail>;
   return (
     isValidObject(data) &&
     validateBtcSummary(data) &&
-    isValidObject(data.sentiment) &&
-    isValidObject(data.technical) &&
-    isValidObject(data.recommendation)
+    isValidObject(candidate.sentiment) &&
+    isValidObject(candidate.technical) &&
+    isValidObject(candidate.recommendation)
   );
 }
 

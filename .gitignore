@@ -34,3 +34,4 @@ config.json
 
 # Runtime data
 pangang-backend/app/data/
+pangang-backend/app/data_cache/

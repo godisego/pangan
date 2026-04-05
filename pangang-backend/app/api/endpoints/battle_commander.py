@@ -50,8 +50,23 @@ async def get_yesterday_review():
     """仅获取昨日复盘 (第二部分)"""
     try:
         from app.services.history_tracker import history_tracker
-        result = history_tracker.verify_yesterday_logic()
-        return {"status": "success", "data": result or {"message": "无昨日记录"}}
+        records = history_tracker.get_recent_records(limit=20)
+        latest = records[0] if records else None
+
+        if not latest:
+            return {"status": "success", "data": {"message": "无昨日记录"}}
+
+        verify_result = latest.get("verify_result")
+
+        return {
+            "status": "success",
+            "data": verify_result or {
+                "message": "验证结果稍后补齐",
+                "date": latest.get("date"),
+                "verified": latest.get("verified", False),
+                "verification_meta": latest.get("verification_meta", {}),
+            },
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -79,8 +94,6 @@ async def get_review_by_date(date: str):
             return {"status": "success", "data": None}
 
         verify_result = record.get("verify_result")
-        if not verify_result:
-            verify_result = history_tracker.verify_yesterday_logic(date)
 
         return {
             "status": "success",
@@ -89,7 +102,9 @@ async def get_review_by_date(date: str):
                 "logic_a": record.get("logic_a", {}),
                 "logic_b": record.get("logic_b", {}),
                 "verified": record.get("verified", False),
-                "verify_result": verify_result
+                "verification_meta": record.get("verification_meta", {}),
+                "verify_result": verify_result,
+                "learning_feedback": history_tracker.get_learning_feedback(days=12),
             }
         }
     except Exception as e:

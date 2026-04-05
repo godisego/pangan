@@ -1,806 +1,692 @@
 'use client';
 
-import Link from 'next/link';
-import { useRouter } from 'next/navigation';
-import { useState, useEffect } from 'react';
 import dynamic from 'next/dynamic';
-import { btcApi } from '@/lib/api';
-import { formatPercent, formatNumber, formatRelativeTime } from '@/utils/formatters';
+import Link from 'next/link';
+import { type ComponentProps, useEffect, useMemo, useState } from 'react';
+import AppShell from '@/components/AppShell';
+import ModuleShell from '@/components/ModuleShell';
 import { KLineSkeleton } from '@/components/ui/LoadingSkeleton';
-import type { BtcDetail, BtcStrategy, StatusType } from '@/types/api';
+import { btcApi } from '@/lib/api';
+import { formatNumber, formatPercent } from '@/utils/formatters';
+import type { BtcDetail, BtcKline, BtcStrategyCard } from '@/types/api';
 
-const KLineChart = dynamic(() => import('../../components/KLineChart'), { ssr: false });
+const KLineChart = dynamic(() => import('@/components/KLineChart'), { ssr: false });
 
-// 异动提示卡组件 - 展示智能多因子分析
-function MarketAlertCard({ change24h, fearGreed, strategy }: { change24h: number; fearGreed: number; strategy?: BtcStrategy }) {
-    if (!strategy) return null;
+const BTC_DETAIL_CACHE_KEY = 'pangang_cache_btc_detail_v3';
+const KLINE_CACHE_PREFIX = 'pangang_cache_btc_kline_v2_';
+type ChartData = ComponentProps<typeof KLineChart>['data'];
+type ChartMarkers = NonNullable<ComponentProps<typeof KLineChart>['markers']>;
 
-    const isExtreme = Math.abs(change24h) >= 5 || fearGreed <= 25 || fearGreed >= 75;
-    if (!isExtreme) return null;
-
-    const alertConfig = {
-        crash: { bg: 'bg-red-500/20', border: 'border-red-500/50', icon: '🚨', label: '市场暴跌' },
-        dump: { bg: 'bg-orange-500/20', border: 'border-orange-500/50', icon: '⚠️', label: '大幅回调' },
-        surge: { bg: 'bg-yellow-500/20', border: 'border-yellow-500/50', icon: '🚀', label: '市场暴涨' },
-        pump: { bg: 'bg-green-500/20', border: 'border-green-500/50', icon: '📈', label: '强势拉升' },
-        normal: { bg: 'bg-blue-500/20', border: 'border-blue-500/50', icon: '📊', label: '市场异动' },
-    };
-
-    const marketState = strategy?.marketState ?? 'normal';
-    const config = alertConfig[marketState as keyof typeof alertConfig] || alertConfig.normal;
-
-    // 判断整体倾向颜色
-    const overallColor = strategy.overall?.includes('bullish')
-        ? 'text-[var(--accent-green)]'
-        : strategy.overall?.includes('bearish')
-            ? 'text-[var(--accent-red)]'
-            : 'text-yellow-400';
-
-    return (
-        <section className={`card ${config.bg} border ${config.border}`}>
-            {/* 头部：状态标签 + 涨跌幅 */}
-            <div className="flex items-center gap-2 mb-3">
-                <span className="text-2xl">{config.icon}</span>
-                <span className="text-lg font-bold text-[var(--text-primary)]">{config.label}</span>
-                <span className={`ml-auto text-lg font-bold ${change24h >= 0 ? 'text-[var(--accent-green)]' : 'text-[var(--accent-red)]'}`}>
-                    {change24h >= 0 ? '+' : ''}{change24h}%
-                </span>
-            </div>
-
-            {/* 核心观点 */}
-            <p className="text-sm text-[var(--text-primary)] mb-3 leading-relaxed">{strategy.summary}</p>
-
-            {/* 综合评分 + 操作建议 */}
-            <div className="flex items-center justify-between mb-4 p-2 bg-[var(--bg-primary)]/50 rounded-lg">
-                <div className="flex items-center gap-2">
-                    <span className="text-xs text-[var(--text-secondary)]">综合评分</span>
-                    <span className={`text-lg font-bold ${overallColor}`}>
-                        {strategy.totalScore?.toFixed(1) || 'N/A'}
-                    </span>
-                </div>
-                <span className={`px-3 py-1 rounded-full text-sm font-bold ${strategy.overall?.includes('bullish') ? 'bg-[var(--accent-green)]/20 text-[var(--accent-green)]' : strategy.overall?.includes('bearish') ? 'bg-red-500/20 text-red-400' : 'bg-orange-500/20 text-orange-400'}`}>
-                    {strategy.action}
-                </span>
-            </div>
-
-            {/* 多因子雷达 */}
-            {strategy.factors && (
-                <div className="grid grid-cols-5 gap-1 mb-4">
-                    {Object.entries(strategy.factors).map(([key, val]) => (
-                        <div key={key} className="text-center p-1 bg-[var(--bg-primary)]/30 rounded">
-                            <div className={`text-xs font-bold ${val.score > 20 ? 'text-[var(--accent-green)]' : val.score < -20 ? 'text-[var(--accent-red)]' : 'text-[var(--text-secondary)]'}`}>
-                                {val.score > 0 ? '+' : ''}{val.score.toFixed(0)}
-                            </div>
-                            <div className="text-[10px] text-[var(--text-secondary)]">{val.label.split(':')[0]}</div>
-                        </div>
-                    ))}
-                </div>
-            )}
-
-            {/* 模式识别 */}
-            {strategy.patterns && strategy.patterns.length > 0 && (
-                <div className="flex flex-wrap gap-1 mb-3">
-                    {strategy.patterns.map((p: string, i: number) => (
-                        <span key={i} className="px-2 py-0.5 rounded text-xs bg-[var(--bg-primary)]/50 text-[var(--text-secondary)]">
-                            🔍 {p}
-                        </span>
-                    ))}
-                </div>
-            )}
-
-            {/* 可能原因 */}
-            {strategy.possibleReasons && strategy.possibleReasons.length > 0 && (
-                <div className="mb-3 p-2 bg-[var(--bg-primary)]/30 rounded-lg">
-                    <div className="text-xs text-[var(--text-secondary)] mb-1">💡 可能原因</div>
-                    {strategy.possibleReasons.map((r: string, i: number) => (
-                        <div key={i} className="text-xs text-[var(--text-primary)] leading-relaxed">{r}</div>
-                    ))}
-                </div>
-            )}
-
-            {/* 风险提示 */}
-            {strategy.risks && strategy.risks.length > 0 && (
-                <div className="p-2 bg-red-500/10 rounded-lg border border-red-500/20">
-                    <div className="text-xs text-red-400 mb-1">⚠️ 风险提示</div>
-                    {strategy.risks.slice(0, 2).map((r: string, i: number) => (
-                        <div key={i} className="text-xs text-[var(--text-secondary)]">• {r}</div>
-                    ))}
-                </div>
-            )}
-        </section>
-    );
+function readCachedJson<T>(key: string): T | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as T) : null;
+  } catch {
+    return null;
+  }
 }
 
-// 模拟BTC详细数据
-const mockBtcDetail = {
-    price: 102580,
-    change24h: 3.2,
-    change7d: 8.5,
-    change30d: 15.2,
-    high24h: 103500,
-    low24h: 98200,
+function writeCachedJson<T>(key: string, value: T) {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // ignore storage failure
+  }
+}
 
-    // 网络健康度 (替代原链上数据)
-    network: {
-        status: 'bullish' as const,
-        score: 75,
-        indicators: [
-            { name: '算力', value: '加载中', meaning: '加载中', isBullish: true },
-            { name: '难度', value: '加载中', meaning: '挖矿竞争度', isBullish: true },
-            { name: '24H交易', value: '加载中', meaning: '链上活跃度', isBullish: true },
-        ],
-        summary: '加载中...',
-    },
-
-    // 市场情绪
-    sentiment: {
-        status: 'caution' as const,
-        score: 65,
-        fearGreed: 72,
-        fearGreedLabel: '贪婪',
-        indicators: [
-            { name: '恐贪指数', value: '72', threshold: '>75需警惕', isBullish: true },
-            { name: '资金费率', value: '加载中', meaning: '加载中', isBullish: true },
-            { name: '未平仓量', value: '加载中', meaning: '加载中', isBullish: true },
-        ],
-        summary: '市场偏乐观，短期可能有回调压力',
-    },
-
-    // 全球市场 (替代原ETF资金流)
-    market: {
-        status: 'neutral' as const,
-        score: 60,
-        indicators: [
-            { name: '24H市值', value: '加载中', meaning: '加载中', isBullish: true },
-            { name: '加密总市值', value: '加载中', meaning: '加载中', isBullish: true },
-            { name: 'BTC市占', value: '加载中', meaning: '加载中', isBullish: true },
-        ],
-        summary: '加载中...',
-    },
-
-    // 技术位置
+function getEmptyBtcDetail(): BtcDetail {
+  return {
+    price: 0,
+    change24h: 0,
+    change7d: 0,
+    change30d: 0,
+    high24h: 0,
+    low24h: 0,
+    volume24h: 0,
+    fearGreed: 50,
+    fearGreedLabel: '中性',
+    source: '未就绪',
+    stale: true,
+    unavailable: true,
     technical: {
-        status: 'bullish' as const,
-        score: 75,
-        support: 95000,
-        resistance: 108000,
-        ma7: 99800,
-        ma30: 95200,
-        ma200: 72500,
-        rsi: 68,
-        indicators: [
-            { name: 'MA位置', value: '站稳所有均线', meaning: '多头排列', isBullish: true },
-            { name: 'RSI', value: '68', meaning: '偏强未超买', isBullish: true },
-            { name: 'MACD', value: '金叉', meaning: '动能向上', isBullish: true },
-        ],
-        summary: '趋势向上，回调可接',
+      support: 0,
+      resistance: 0,
+      ma7: 0,
+      ma30: 0,
+      rsi: 50,
+      status: 'neutral',
+      score: 0,
+      indicators: [],
+      summary: '技术面尚未加载。',
     },
-
-    // 综合建议
+    network: {
+      status: 'neutral',
+      score: 0,
+      indicators: [],
+      summary: '网络健康度尚未加载。',
+    },
+    market: {
+      status: 'neutral',
+      score: 0,
+      indicators: [],
+      summary: '全球市场联动尚未加载。',
+    },
+    sentiment: {
+      status: 'neutral',
+      score: 0,
+      fearGreed: 50,
+      fearGreedLabel: '中性',
+      indicators: [],
+      summary: '情绪数据尚未加载。',
+    },
     recommendation: {
-        overall: 'bullish' as const,
-        confidence: 75,
-        summary: '当前偏多，但短期需警惕贪婪情绪引发的回调',
-        reasoning: [
-            '✅ 链上数据健康：交易所持续流出，巨鲸增持',
-            '✅ 资金面强劲：ETF资金持续流入，机构看好',
-            '⚠️ 情绪略过热：恐贪指数72进入贪婪区',
-            '✅ 技术面良好：站稳10万，多头排列',
-        ],
-        strategies: [
-            {
-                type: 'conservative',
-                label: '🐢 保守策略',
-                action: '观望等待回调',
-                range: { low: 95000, high: 98000, type: 'buy' },
-                reasoning: '等待回调至MA30附近($95K)再分批建仓，风险收益比更优',
-                stopLoss: 90000,
-                takeProfit: 108000,
-            },
-            {
-                type: 'balanced',
-                label: '⚖️ 平衡策略',
-                action: '持有观望',
-                range: { low: 98000, high: 102000, type: 'hold' },
-                reasoning: '当前价位可持有，不追涨。若回调至支撑位$98K可加仓',
-                stopLoss: 93000,
-                takeProfit: 115000,
-            },
-            {
-                type: 'aggressive',
-                label: '🔥 激进策略',
-                action: '可适度参与',
-                range: { low: 102000, high: 108000, type: 'buy' },
-                reasoning: '趋势向上，可参与。突破$108K阻力位可追仓',
-                stopLoss: 98000,
-                takeProfit: 125000,
-            },
-        ],
+      overall: 'neutral',
+      confidence: 0,
+      summary: '正在生成 BTC 判断。',
+      reasoning: [],
+      strategies: [],
     },
-};
-
-// 状态信号灯 - 支持扩展状态类型
-function StatusLight({ status }: { status: string }) {
-    const config: Record<string, { color: string; label: string }> = {
-        bullish: { color: 'bg-[var(--accent-green)]', label: '看多' },
-        cautious_bullish: { color: 'bg-green-400', label: '谨慎看多' },
-        neutral: { color: 'bg-yellow-400', label: '中性' },
-        cautious_bearish: { color: 'bg-orange-400', label: '谨慎看空' },
-        bearish: { color: 'bg-[var(--accent-red)]', label: '看空' },
-        caution: { color: 'bg-orange-400', label: '警惕' },
-        opportunity: { color: 'bg-[var(--accent-green)]', label: '机会' },
-    };
-    const { color, label } = config[status] || config.neutral;
-    return (
-        <div className="flex items-center gap-2">
-            <div className={`w-3 h-3 rounded-full ${color} animate-pulse`} />
-            <span className={`text-sm font-medium ${color.replace('bg-', 'text-')}`}>{label}</span>
-        </div>
-    );
+    kline: undefined,
+    dynamicStrategy: undefined,
+  };
 }
 
-// 指标卡片（带依据）
-function IndicatorCard({ indicator }: { indicator: { name: string; value: string; change?: number; meaning?: string; threshold?: string; isBullish: boolean } }) {
-    return (
-        <div className="p-3 bg-[var(--bg-secondary)] rounded-lg">
-            <div className="flex items-center justify-between mb-1">
-                <span className="text-xs text-[var(--text-secondary)]">{indicator.name}</span>
-                <span className={`text-xs ${indicator.isBullish ? 'text-[var(--accent-green)]' : 'text-orange-400'}`}>
-                    {indicator.isBullish ? '✓' : '⚠'}
-                </span>
-            </div>
-            <div className="text-sm font-bold text-[var(--text-primary)]">
-                {indicator.value}
-                {indicator.change !== undefined && (
-                    <span className={`text-xs ml-1 ${indicator.change >= 0 ? 'text-[var(--accent-green)]' : 'text-[var(--accent-red)]'}`}>
-                        {indicator.change >= 0 ? '+' : ''}{indicator.change}%
-                    </span>
-                )}
-            </div>
-            <div className="text-xs text-[var(--text-secondary)] mt-1">
-                {indicator.meaning || indicator.threshold}
-            </div>
-        </div>
-    );
+function buildSentiment(detail: BtcDetail) {
+  const fearGreed = detail.fearGreed ?? 50;
+  return {
+    status: fearGreed <= 25 ? 'bearish' : fearGreed >= 75 ? 'caution' : 'neutral',
+    score: fearGreed <= 25 ? 30 : fearGreed >= 75 ? 80 : 55,
+    fearGreed,
+    fearGreedLabel: detail.fearGreedLabel,
+    indicators: [
+      {
+        name: '恐贪指数',
+        value: `${fearGreed}`,
+        meaning: fearGreed <= 25 ? '极度恐惧' : fearGreed >= 75 ? '极度贪婪' : '情绪中性',
+        isBullish: fearGreed < 40,
+      },
+      {
+        name: '24H 波动',
+        value: formatPercent(detail.change24h),
+        meaning: Math.abs(detail.change24h) >= 3 ? '波动明显' : '波动温和',
+        isBullish: detail.change24h >= 0,
+      },
+      {
+        name: '数据状态',
+        value: detail.unavailable ? '不可用' : detail.stale ? '降级快照' : '实时摘要',
+        meaning: detail.source || '未标注来源',
+        isBullish: !detail.unavailable,
+      },
+    ],
+    summary: detail.strategy?.summary || 'BTC 当前主要用于判断市场风险偏好，而不是单独决定总览结论。',
+  } as BtcDetail['sentiment'];
 }
 
-// 分析模块
-function AnalysisSection({ title, status, score, indicators, summary }: {
-    title: string;
-    status: 'bullish' | 'neutral' | 'bearish' | 'caution';
-    score: number;
-    indicators: Array<{ name: string; value: string; change?: number; meaning?: string; threshold?: string; isBullish: boolean }>;
-    summary: string;
+function buildTechnical(detail: BtcDetail) {
+  const base = detail.technical;
+  const status: BtcDetail['technical']['status'] =
+    detail.price > base.ma30 && base.rsi < 70
+      ? 'bullish'
+      : detail.price < base.support || base.rsi > 75
+        ? 'caution'
+        : 'neutral';
+
+  return {
+    ...base,
+    status,
+    score:
+      detail.price > base.ma30
+        ? 72
+        : detail.price > base.support
+          ? 56
+          : 38,
+    indicators: [
+      {
+        name: 'MA30',
+        value: `$${formatNumber(base.ma30)}`,
+        meaning: detail.price > base.ma30 ? '价格站上中期均线' : '价格仍在均线下方',
+        isBullish: detail.price > base.ma30,
+      },
+      {
+        name: 'RSI',
+        value: `${base.rsi.toFixed(1)}`,
+        meaning: base.rsi < 30 ? '偏超卖' : base.rsi > 70 ? '偏超买' : '区间中性',
+        isBullish: base.rsi < 55,
+      },
+      {
+        name: '关键位',
+        value: `$${formatNumber(base.support)} / $${formatNumber(base.resistance)}`,
+        meaning: '支撑 / 阻力',
+        isBullish: detail.price >= base.support,
+      },
+    ],
+    summary:
+      base.summary ||
+      `当前支撑位在 $${formatNumber(base.support)}，阻力位在 $${formatNumber(base.resistance)}。`,
+  };
+}
+
+function buildRecommendation(detail: BtcDetail): BtcDetail['recommendation'] {
+  const support = detail.technical.support || detail.price * 0.94;
+  const resistance = detail.technical.resistance || detail.price * 1.06;
+  const dynamic = detail.strategy;
+
+  const strategies: BtcStrategyCard[] = [
+    {
+      type: 'dynamic',
+      label: '当前建议',
+      action: dynamic?.action || '观察企稳',
+      range: {
+        low: dynamic?.buyRange?.low || Math.round(support),
+        high: dynamic?.buyRange?.high || Math.round(detail.price * 1.01),
+        type: dynamic?.overall === 'bullish' ? 'buy' : 'hold',
+      },
+      reasoning: dynamic?.summary || '优先跟随实时摘要，不在模糊区间盲目加仓。',
+      stopLoss: Math.round(dynamic?.stopLoss || support * 0.96),
+      takeProfit: Math.round(dynamic?.takeProfit || resistance * 1.04),
+    },
+    {
+      type: 'conservative',
+      label: '保守方案',
+      action: '等回踩支撑',
+      range: {
+        low: Math.round(support * 0.99),
+        high: Math.round(support * 1.01),
+        type: 'buy',
+      },
+      reasoning: `如果价格回踩到支撑位 $${formatNumber(support)} 附近再分批考虑。`,
+      stopLoss: Math.round(support * 0.94),
+      takeProfit: Math.round(detail.price * 1.03),
+    },
+    {
+      type: 'aggressive',
+      label: '进攻方案',
+      action: '看突破确认',
+      range: {
+        low: Math.round(detail.price * 0.995),
+        high: Math.round(resistance),
+        type: 'buy',
+      },
+      reasoning: `只有放量突破 $${formatNumber(resistance)} 后才考虑追击，不提前预判。`,
+      stopLoss: Math.round(detail.price * 0.97),
+      takeProfit: Math.round(resistance * 1.08),
+    },
+  ];
+
+  return {
+    overall: dynamic?.overall || 'neutral',
+    confidence: dynamic?.confidence || 60,
+    summary: dynamic?.summary || 'BTC 当前更适合做风险偏好的辅助判断。',
+    reasoning: dynamic?.reasoning || ['先看实时摘要，再确认技术位和外部市场是否共振。'],
+    strategies,
+  };
+}
+
+function buildCoreDetail(current: BtcDetail, incoming: Partial<BtcDetail>): BtcDetail {
+  const merged = {
+    ...current,
+    ...incoming,
+  } as BtcDetail;
+
+  merged.sentiment = buildSentiment(merged);
+  merged.technical = buildTechnical(merged);
+  merged.recommendation = buildRecommendation(merged);
+  return merged;
+}
+
+function StatusChip({ label, value, accent = 'default' }: { label: string; value: string; accent?: 'default' | 'good' | 'warn' }) {
+  const accentClass =
+    accent === 'good'
+      ? 'text-[var(--accent-green)]'
+      : accent === 'warn'
+        ? 'text-[var(--accent-gold)]'
+        : 'text-[var(--text-primary)]';
+
+  return (
+    <div className="module-node">
+      <div className="module-node__label">{label}</div>
+      <div className={`module-node__title ${accentClass}`}>{value}</div>
+    </div>
+  );
+}
+
+function FactorBlock({
+  title,
+  score,
+  summary,
+  indicators,
+}: {
+  title: string;
+  score: number;
+  summary: string;
+  indicators: Array<{ name: string; value: string; meaning?: string; isBullish: boolean }>;
 }) {
-    return (
-        <section className="card">
-            <div className="flex items-center justify-between mb-3">
-                <h3 className="text-sm font-medium text-[var(--text-primary)]">{title}</h3>
-                <div className="flex items-center gap-3">
-                    <span className="text-xs text-[var(--text-secondary)]">得分 {score}/100</span>
-                    <StatusLight status={status} />
-                </div>
+  return (
+    <div className="module-node">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="module-node__label">{title}</div>
+          <div className="module-node__title">{score}/100</div>
+        </div>
+      </div>
+      <div className="mt-4 scan-list">
+        {indicators.map((indicator) => (
+          <div key={`${title}-${indicator.name}`} className="scan-row">
+            <div className="scan-row-copy">
+              <strong>{indicator.name}</strong>
+              <span>{indicator.meaning || '暂无补充说明'}</span>
             </div>
-            <div className="grid grid-cols-3 gap-2 mb-3">
-                {indicators.map((ind, i) => (
-                    <IndicatorCard key={i} indicator={ind} />
-                ))}
+            <div className={`scan-row-value ${indicator.isBullish ? 'text-[var(--accent-green)]' : 'text-[var(--accent-gold)]'}`}>
+              {indicator.value}
             </div>
-            <div className="p-2 bg-[var(--bg-secondary)] rounded-lg text-sm text-[var(--text-primary)]">
-                💡 <span className="text-[var(--text-secondary)]">含义：</span>{summary}
-            </div>
-        </section>
-    );
+          </div>
+        ))}
+      </div>
+      <div className="mt-4 text-sm leading-7 text-[var(--text-secondary)]">{summary}</div>
+    </div>
+  );
 }
 
-// 策略卡片
-function StrategyCard({ strategy }: { strategy: typeof mockBtcDetail.recommendation.strategies[0] }) {
-    const rangeLabel = strategy.range.type === 'buy' ? '买入区间' : strategy.range.type === 'sell' ? '卖出区间' : '持有区间';
-    const rangeColor = strategy.range.type === 'buy' ? 'text-[var(--accent-green)]' : strategy.range.type === 'sell' ? 'text-[var(--accent-red)]' : 'text-yellow-400';
+function StrategyLane({ strategy }: { strategy: BtcStrategyCard }) {
+  const actionColor =
+    strategy.range.type === 'buy'
+      ? 'text-[var(--accent-green)]'
+      : strategy.range.type === 'sell'
+        ? 'text-[var(--accent-red)]'
+        : 'text-[var(--accent-gold)]';
 
-    return (
-        <div className="p-4 bg-[var(--bg-secondary)] rounded-lg">
-            <div className="flex items-center justify-between mb-2">
-                <span className="font-medium text-[var(--text-primary)]">{strategy.label}</span>
-                <span className={`text-sm font-bold ${rangeColor}`}>{strategy.action}</span>
-            </div>
-
-            {/* 价格区间 */}
-            <div className="mb-3 p-2 bg-[var(--bg-primary)] rounded">
-                <div className="text-xs text-[var(--text-secondary)] mb-1">{rangeLabel}</div>
-                <div className={`text-lg font-bold ${rangeColor}`}>
-                    ${formatNumber(strategy.range.low)} - ${formatNumber(strategy.range.high)}
-                </div>
-            </div>
-
-            {/* 止损止盈 */}
-            <div className="grid grid-cols-2 gap-2 mb-3 text-sm">
-                <div className="flex justify-between">
-                    <span className="text-[var(--text-secondary)]">止损位</span>
-                    <span className="text-[var(--accent-red)]">${formatNumber(strategy.stopLoss)}</span>
-                </div>
-                <div className="flex justify-between">
-                    <span className="text-[var(--text-secondary)]">目标位</span>
-                    <span className="text-[var(--accent-green)]">${formatNumber(strategy.takeProfit)}</span>
-                </div>
-            </div>
-
-            {/* 逻辑解释 */}
-            <div className="text-sm text-[var(--text-secondary)] border-t border-[var(--border-color)] pt-2">
-                📝 {strategy.reasoning}
-            </div>
+  return (
+    <div className="module-node">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="module-node__label">{strategy.label}</div>
+          <div className="module-node__title">{strategy.action}</div>
         </div>
-    );
+        <div className={`text-xs font-semibold uppercase tracking-[0.16em] ${actionColor}`}>{strategy.range.type}</div>
+      </div>
+      <div className="mt-4 scan-list">
+        <div className="scan-row">
+          <div className="scan-row-copy">
+            <strong>价格区间</strong>
+            <span>根据当前结构给出的执行带</span>
+          </div>
+          <div className={`scan-row-value ${actionColor}`}>
+            ${formatNumber(strategy.range.low)} - ${formatNumber(strategy.range.high)}
+          </div>
+        </div>
+        <div className="scan-row">
+          <div className="scan-row-copy">
+            <strong>止损 / 目标</strong>
+            <span>失效位和兑现位</span>
+          </div>
+          <div className="scan-row-value">
+            ${formatNumber(strategy.stopLoss)} / ${formatNumber(strategy.takeProfit)}
+          </div>
+        </div>
+      </div>
+      <div className="mt-4 text-sm leading-7 text-[var(--text-secondary)]">{strategy.reasoning}</div>
+    </div>
+  );
 }
 
 export default function BtcDetailPage() {
-    const router = useRouter();
-    const [data, setData] = useState<any>(mockBtcDetail);
-    const [loading, setLoading] = useState(true);
-    const [klineInterval, setKlineInterval] = useState('1H'); // K线周期状态
-    const [showMA, setShowMA] = useState(true); // 显示MA均线
-    const [showVolume, setShowVolume] = useState(true); // 显示成交量
-    const [showRSI, setShowRSI] = useState(false); // 显示RSI
-    const [showMACD, setShowMACD] = useState(false); // 显示MACD
+  const [data, setData] = useState<BtcDetail>(getEmptyBtcDetail());
+  const [loading, setLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [klineInterval, setKlineInterval] = useState('1H');
 
-    useEffect(() => {
-        const fetchData = async () => {
-            // ===== 阶段1: 核心数据优先加载 (快速响应) =====
-            try {
-                const [summaryRes, technicalRes] = await Promise.all([
-                    btcApi.getSummary(),
-                    btcApi.getTechnical()
-                ]);
+  const refreshCore = async (background = false) => {
+    try {
+      if (background) {
+        setIsRefreshing(true);
+      } else {
+        setLoading(true);
+      }
 
-                if (!summaryRes || !technicalRes) throw new Error("Core API failed");
+      const summary = await btcApi.getSummary();
+      const next = buildCoreDetail(getEmptyBtcDetail(), {
+        ...summary,
+        dynamicStrategy: summary.strategy,
+      });
 
-                // 立即显示核心数据
-                setData((prev: any) => ({
-                    ...prev,
-                    price: summaryRes.price,
-                    change24h: summaryRes.change24h,
-                    change7d: summaryRes.change7d || prev.change7d,
-                    change30d: summaryRes.change30d || prev.change30d,
-                    high24h: summaryRes.high24h || summaryRes.price * 1.05,
-                    low24h: summaryRes.low24h || summaryRes.price * 0.95,
-                    volume24h: summaryRes.volume24h,
-                    fearGreed: summaryRes.fearGreed,
-                    fearGreedLabel: summaryRes.fearGreedLabel,
-                    dynamicStrategy: summaryRes.strategy,
-                    sentiment: {
-                        ...prev.sentiment,
-                        fearGreed: summaryRes.fearGreed,
-                        fearGreedLabel: summaryRes.fearGreedLabel,
-                        score: summaryRes.fearGreed <= 25 ? 30 : summaryRes.fearGreed >= 75 ? 80 : 50,
-                        status: summaryRes.fearGreed <= 25 ? 'bearish' : summaryRes.fearGreed >= 75 ? 'caution' : 'neutral',
-                        summary: summaryRes.strategy?.summary || prev.sentiment.summary,
-                        // 恐贪指数在核心数据阶段即可更新
-                        indicators: [
-                            { name: '恐贪指数', value: summaryRes.fearGreed.toString(), threshold: summaryRes.fearGreed <= 25 ? '极度恐惧' : summaryRes.fearGreed >= 75 ? '极度贪婪' : '中性', isBullish: summaryRes.fearGreed <= 40 },
-                            // 资金费率和未平仓量在第二阶段更新，这里先保留加载中状态
-                            { name: '资金费率', value: '加载中', meaning: '加载中', isBullish: true },
-                            { name: '未平仓量', value: '加载中', meaning: '加载中', isBullish: true },
-                        ],
-                    },
-                    technical: {
-                        ...prev.technical,
-                        support: technicalRes.technical.support,
-                        resistance: technicalRes.technical.resistance,
-                        ma7: technicalRes.technical.ma7,
-                        ma30: technicalRes.technical.ma30,
-                        rsi: technicalRes.technical.rsi,
-                        status: technicalRes.technical.rsi > 70 ? 'caution' : technicalRes.technical.rsi < 30 ? 'bullish' : 'neutral',
-                        indicators: [
-                            { name: 'MA位置', value: summaryRes.price > technicalRes.technical.ma30 ? '站稳MA30' : '跌破MA30', meaning: '均线位置', isBullish: summaryRes.price > technicalRes.technical.ma30 },
-                            { name: 'RSI', value: technicalRes.technical.rsi?.toFixed(1) || '50', meaning: technicalRes.technical.rsi < 30 ? '超卖' : technicalRes.technical.rsi > 70 ? '超买' : '中性', isBullish: technicalRes.technical.rsi < 50 },
-                            { name: '支撑位', value: `$${technicalRes.technical.support?.toLocaleString()}`, meaning: '关键支撑', isBullish: summaryRes.price > technicalRes.technical.support },
-                        ]
-                    },
-                    recommendation: {
-                        overall: summaryRes.strategy?.overall || prev.recommendation.overall,
-                        confidence: summaryRes.strategy?.confidence || prev.recommendation.confidence,
-                        summary: summaryRes.strategy?.summary || prev.recommendation.summary,
-                        reasoning: summaryRes.strategy?.reasoning || prev.recommendation.reasoning,
-                        strategies: (() => {
-                            const price = summaryRes.price;
-                            const support = technicalRes.technical.support || price * 0.9;
-                            const resistance = technicalRes.technical.resistance || price * 1.1;
-                            const stopLoss = summaryRes.strategy?.stopLoss || support * 0.92;
-                            const takeProfit = summaryRes.strategy?.takeProfit || resistance * 1.05;
-                            return [
-                                {
-                                    type: 'dynamic',
-                                    label: '🎯 当前建议',
-                                    action: summaryRes.strategy?.action || '计算中',
-                                    range: {
-                                        low: summaryRes.strategy?.buyRange?.low || Math.round(price * 0.95),
-                                        high: summaryRes.strategy?.buyRange?.high || Math.round(price * 1.02),
-                                        type: summaryRes.strategy?.overall?.includes('bullish') ? 'buy' : 'hold'
-                                    },
-                                    reasoning: summaryRes.strategy?.summary || '',
-                                    stopLoss: Math.round(stopLoss),
-                                    takeProfit: Math.round(takeProfit),
-                                },
-                                {
-                                    type: 'conservative',
-                                    label: '🐢 保守策略',
-                                    action: price < support * 1.05 ? '支撑位附近可布局' : '等待回调至支撑',
-                                    range: { low: Math.round(support * 0.98), high: Math.round(support * 1.02), type: 'buy' },
-                                    reasoning: `等待回调至支撑位$${Math.round(support).toLocaleString()}附近再分批建仓`,
-                                    stopLoss: Math.round(support * 0.90),
-                                    takeProfit: Math.round(resistance),
-                                },
-                                {
-                                    type: 'aggressive',
-                                    label: '🔥 激进策略',
-                                    action: price > resistance * 0.95 ? '接近阻力位谨慎' : '趋势中可参与',
-                                    range: { low: Math.round(price * 0.98), high: Math.round(resistance), type: 'buy' },
-                                    reasoning: `趋势向上可参与，突破阻力位$${Math.round(resistance).toLocaleString()}可追仓`,
-                                    stopLoss: Math.round(support),
-                                    takeProfit: Math.round(resistance * 1.15),
-                                },
-                            ];
-                        })()
-                    }
-                }));
+      setData((prev) => buildCoreDetail({ ...prev, ...next }, next));
+      writeCachedJson(BTC_DETAIL_CACHE_KEY, next);
+      setError(null);
 
-                // 核心数据加载完成，立即结束loading状态
-                setLoading(false);
+      void refreshSecondary();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'BTC 详情暂时不可用';
+      const cached = readCachedJson<BtcDetail>(BTC_DETAIL_CACHE_KEY);
+      if (cached) {
+        setData(cached);
+      }
+      setError(message);
+    } finally {
+      setLoading(false);
+      setIsRefreshing(false);
+    }
+  };
 
-                // ===== 阶段2: 扩展数据后台加载 (不阻塞UI) =====
-                // ===== 阶段2: 扩展数据后台加载 (不阻塞UI) =====
-                const [derivativesRes, networkRes, marketRes] = await Promise.all([
-                    btcApi.getDerivatives().catch(() => null),
-                    btcApi.getNetwork().catch(() => null),
-                    btcApi.getMarket().catch(() => null)
-                ]);
+  const refreshSecondary = async () => {
+    try {
+      const [technical, derivatives, network, market] = await Promise.all([
+        btcApi.getTechnical().catch(() => null),
+        btcApi.getDerivatives().catch(() => null),
+        btcApi.getNetwork().catch(() => null),
+        btcApi.getMarket().catch(() => null),
+      ]);
 
-                // 渐进更新扩展数据
-                setData((prev: any) => ({
-                    ...prev,
-                    ...prev,
-                    derivatives: derivativesRes || prev.derivatives,
-                    sentiment: {
-                        ...prev.sentiment,
-                        indicators: [
-                            // 恐贪指数已在第一阶段更新，这里确保它不被覆盖或使用prev.fearGreed
-                            { name: '恐贪指数', value: prev.fearGreed?.toString() || '50', threshold: prev.fearGreed <= 25 ? '极度恐惧' : prev.fearGreed >= 75 ? '极度贪婪' : '中性', isBullish: prev.fearGreed <= 40 },
-                            {
-                                name: '资金费率',
-                                value: derivativesRes?.fundingRatePct != null ? `${derivativesRes.fundingRatePct}%` : 'N/A',
-                                meaning: derivativesRes?.fundingRatePct != null
-                                    ? (derivativesRes.fundingRatePct > 0.01 ? '多头过热' : derivativesRes.fundingRatePct < -0.01 ? '空头过热' : '中性')
-                                    : '加载中',
-                                isBullish: derivativesRes?.fundingRatePct != null && derivativesRes.fundingRatePct < 0.01
-                            },
-                            {
-                                name: '未平仓量',
-                                value: derivativesRes?.openInterestUsd != null ? `$${derivativesRes.openInterestUsd}B` : 'N/A',
-                                meaning: 'OKX持仓',
-                                isBullish: true
-                            },
-                        ],
-                    },
-                    network: networkRes ? {
-                        status: networkRes.status,
-                        score: networkRes.score,
-                        indicators: networkRes.indicators || prev.network.indicators,
-                        summary: networkRes.summary
-                    } : prev.network,
-                    market: marketRes ? {
-                        status: marketRes.status,
-                        score: marketRes.score,
-                        indicators: marketRes.indicators || prev.market.indicators,
-                        summary: marketRes.summary
-                    } : prev.market,
-                }));
-
-            } catch (e) {
-                console.error("Failed to fetch real data, using mock", e);
-                setLoading(false);
-            }
+      setData((prev) => {
+        const incoming: Partial<BtcDetail> = {
+          fundingRatePct: derivatives?.fundingRatePct ?? prev.fundingRatePct,
+          openInterestUsd: derivatives?.openInterestUsd ?? prev.openInterestUsd,
+          longShortRatio: derivatives?.longShortRatio ?? prev.longShortRatio,
+          network: network || prev.network,
+          market: market || prev.market,
         };
-        fetchData();
-    }, []);
 
-    // 监听 K线周期变化，独立加载数据
-    useEffect(() => {
-        const fetchKline = async () => {
-            // 清空现有K线数据以显示加载状态 (可选，但为了体验最好保留旧数据直到新数据到来，或者显示loading overlay)
-            // 这里为了简洁，直接获取并覆盖
-            try {
-                const klineData = await btcApi.getKline(klineInterval);
-                if (klineData) {
-                    setData((prev: any) => ({ ...prev, kline: klineData }));
-                }
-            } catch (e) {
-                console.error("Failed to fetch kline data", e);
-            }
-        };
-        fetchKline();
-    }, [klineInterval]);
+        if (technical?.technical) {
+          incoming.technical = {
+            ...prev.technical,
+            ...technical.technical,
+          };
+        }
 
-    const isUp = data.change24h >= 0;
+        const next = buildCoreDetail(prev, incoming);
+        writeCachedJson(BTC_DETAIL_CACHE_KEY, next);
+        return next;
+      });
+    } catch {
+      // optional modules stay stale
+    }
+  };
 
-    // 加载中显示骨架屏
-    if (loading) {
-        return (
-            <div className="min-h-screen bg-[var(--bg-primary)] pb-20">
-                <header className="sticky top-0 z-50 bg-[var(--bg-primary)]/80 backdrop-blur-lg border-b border-[var(--border-color)]">
-                    <div className="max-w-3xl mx-auto px-4 py-3">
-                        <div className="flex items-center gap-3">
-                            <button onClick={() => router.back()} className="text-[var(--text-secondary)]">← 返回</button>
-                            <span className="text-xl">₿</span>
-                            <span className="text-lg font-semibold text-[var(--text-primary)]">比特币</span>
-                        </div>
-                    </div>
-                </header>
-                <main className="max-w-3xl mx-auto px-4 py-6 space-y-4">
-                    <section className="card bg-gradient-to-r from-orange-500/10 to-transparent">
-                        <div className="animate-pulse">
-                            <div className="h-10 bg-[var(--bg-secondary)] rounded w-40 mb-2"></div>
-                            <div className="h-4 bg-[var(--bg-secondary)] rounded w-24 mb-4"></div>
-                            <div className="grid grid-cols-4 gap-2">
-                                {[1, 2, 3, 4].map(i => <div key={i} className="h-12 bg-[var(--bg-secondary)] rounded"></div>)}
-                            </div>
-                        </div>
-                    </section>
-                    <KLineSkeleton height={160} />
-                    <section className="card">
-                        <div className="animate-pulse space-y-2">
-                            <div className="h-4 bg-[var(--bg-secondary)] rounded w-1/3"></div>
-                            <div className="grid grid-cols-3 gap-2">
-                                {[1, 2, 3].map(i => <div key={i} className="h-20 bg-[var(--bg-secondary)] rounded"></div>)}
-                            </div>
-                        </div>
-                    </section>
-                </main>
-            </div>
-        );
+  useEffect(() => {
+    const cached = readCachedJson<BtcDetail>(BTC_DETAIL_CACHE_KEY);
+    if (cached) {
+      setData(cached);
+      setLoading(false);
     }
 
-    return (
-        <div className="min-h-screen bg-[var(--bg-primary)] pb-20">
-            {/* Header */}
-            <header className="sticky top-0 z-50 bg-[var(--bg-primary)]/80 backdrop-blur-lg border-b border-[var(--border-color)]">
-                <div className="max-w-3xl mx-auto px-4 py-3">
-                    <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-3">
-                            <button onClick={() => router.back()} className="text-[var(--text-secondary)] hover:text-[var(--text-primary)]">
-                                ← 返回
-                            </button>
-                            <div className="flex items-center gap-2">
-                                <span className="text-xl">₿</span>
-                                <span className="text-lg font-semibold text-[var(--text-primary)]">比特币</span>
-                            </div>
-                        </div>
-                        <Link href="/chat" className="px-3 py-1.5 bg-orange-500/10 text-orange-400 rounded-full text-sm font-medium">
-                            💬 询问AI
-                        </Link>
-                    </div>
-                </div>
-            </header>
+    void refreshCore();
+    const interval = window.setInterval(() => {
+      void refreshCore(true);
+    }, 60000);
+    return () => window.clearInterval(interval);
+  }, []);
 
-            <main className="max-w-3xl mx-auto px-4 py-6 space-y-4">
-                {/* 异动提示卡 - 最醒目的位置 */}
-                <MarketAlertCard change24h={data.change24h} fearGreed={data.sentiment.fearGreed} strategy={data.dynamicStrategy} />
+  useEffect(() => {
+    const cacheKey = `${KLINE_CACHE_PREFIX}${klineInterval}`;
+    const cached = readCachedJson<BtcKline>(cacheKey);
+    if (cached) {
+      setData((prev) => ({ ...prev, kline: cached }));
+    }
 
-                {/* 价格信息 */}
-                <section className="card bg-gradient-to-r from-orange-500/10 to-transparent">
-                    <div className="flex items-start justify-between mb-4">
-                        <div>
-                            <div className="text-3xl font-bold text-orange-400">
-                                ${formatNumber(data.price)}
-                            </div>
-                            <div className="flex items-center gap-2">
-                                <span className={`text-sm ${isUp ? 'text-[var(--accent-green)]' : 'text-[var(--accent-red)]'}`}>
-                                    24H: {formatPercent(data.change24h)}
-                                </span>
-                                <span className="text-xs px-1.5 py-0.5 rounded bg-orange-500/20 text-orange-400">OKX 现货</span>
-                            </div>
-                        </div>
-                        <div className="text-right text-sm text-[var(--text-secondary)]">
-                            <div>24H高: ${formatNumber(data.high24h)}</div>
-                            <div>24H低: ${formatNumber(data.low24h)}</div>
-                        </div>
-                    </div>
-                    <div className="grid grid-cols-4 gap-2 text-center text-sm">
-                        <div>
-                            <div className={`font-bold ${data.change24h >= 0 ? 'text-[var(--accent-green)]' : 'text-[var(--accent-red)]'}`}>
-                                {formatPercent(data.change24h)}
-                            </div>
-                            <div className="text-xs text-[var(--text-secondary)]">24H</div>
-                        </div>
-                        <div>
-                            <div className={`font-bold ${data.change7d >= 0 ? 'text-[var(--accent-green)]' : 'text-[var(--accent-red)]'}`}>
-                                {formatPercent(data.change7d)}
-                            </div>
-                            <div className="text-xs text-[var(--text-secondary)]">7D</div>
-                        </div>
-                        <div>
-                            <div className={`font-bold ${data.change30d >= 0 ? 'text-[var(--accent-green)]' : 'text-[var(--accent-red)]'}`}>
-                                {formatPercent(data.change30d)}
-                            </div>
-                            <div className="text-xs text-[var(--text-secondary)]">30D</div>
-                        </div>
-                        <div>
-                            <div className="font-bold text-[var(--text-primary)]">
-                                ${formatNumber(data.technical.support)}
-                            </div>
-                            <div className="text-xs text-[var(--text-secondary)]">支撑位</div>
-                        </div>
-                    </div>
-                </section>
+    const fetchKline = async () => {
+      try {
+        const result = await btcApi.getKline(klineInterval);
+        setData((prev) => ({ ...prev, kline: result }));
+        writeCachedJson(cacheKey, result);
+      } catch {
+        // keep previous/cached kline
+      }
+    };
 
-                {/* K线图 - 专业版 */}
-                <section className="card">
-                    <div className="flex items-center justify-between mb-3">
-                        <h3 className="text-sm font-medium text-[var(--text-primary)]">📈 K线走势 & 策略识别</h3>
-                        <div className="flex gap-1">
-                            {['15m', '1H', '4H', '1D', '1W'].map((period) => (
-                                <button
-                                    key={period}
-                                    onClick={() => setKlineInterval(period)}
-                                    className={`px-2 py-1 text-xs rounded transition-colors ${klineInterval === period
-                                        ? 'bg-orange-500/20 text-orange-400'
-                                        : 'hover:bg-[var(--bg-tertiary)] text-[var(--text-secondary)]'
-                                        }`}
-                                >
-                                    {period}
-                                </button>
-                            ))}
-                        </div>
-                    </div>
+    void fetchKline();
+  }, [klineInterval]);
 
-                    {/* 指标开关 */}
-                    <div className="flex flex-wrap gap-2 mb-3">
-                        <button
-                            onClick={() => setShowMA(!showMA)}
-                            className={`px-2 py-1 text-xs rounded transition-colors ${showMA
-                                ? 'bg-blue-500/20 text-blue-400'
-                                : 'bg-[var(--bg-secondary)] text-[var(--text-secondary)]'
-                                }`}
-                        >
-                            MA均线
-                        </button>
-                        <button
-                            onClick={() => setShowVolume(!showVolume)}
-                            className={`px-2 py-1 text-xs rounded transition-colors ${showVolume
-                                ? 'bg-purple-500/20 text-purple-400'
-                                : 'bg-[var(--bg-secondary)] text-[var(--text-secondary)]'
-                                }`}
-                        >
-                            成交量
-                        </button>
-                        <button
-                            onClick={() => setShowRSI(!showRSI)}
-                            className={`px-2 py-1 text-xs rounded transition-colors ${showRSI
-                                ? 'bg-yellow-500/20 text-yellow-400'
-                                : 'bg-[var(--bg-secondary)] text-[var(--text-secondary)]'
-                                }`}
-                        >
-                            RSI
-                        </button>
-                        <button
-                            onClick={() => setShowMACD(!showMACD)}
-                            className={`px-2 py-1 text-xs rounded transition-colors ${showMACD
-                                ? 'bg-green-500/20 text-green-400'
-                                : 'bg-[var(--bg-secondary)] text-[var(--text-secondary)]'
-                                }`}
-                        >
-                            MACD
-                        </button>
-                    </div>
+  const headerBadge = useMemo(() => {
+    if (data.unavailable) return '数据不可用';
+    if (data.stale) return '降级快照';
+    return data.source || '实时摘要';
+  }, [data.source, data.stale, data.unavailable]);
 
-                    {/* 使用KLineChart组件 */}
-                    {data.kline ? (
-                        <div className={`w-full rounded-lg overflow-hidden border border-[var(--border-color)] bg-[#111] ${showRSI || showMACD ? 'h-[420px]' : 'h-[350px]'}`}>
-                            <KLineChart
-                                data={data.kline.candles}
-                                markers={data.kline.markers}
-                                height={showRSI || showMACD ? 420 : 350}
-                                interval={klineInterval}
-                                showMA={showMA}
-                                showVolume={showVolume}
-                                showRSI={showRSI}
-                                showMACD={showMACD}
-                            />
-                        </div>
-                    ) : (
-                        <KLineSkeleton height={350} />
-                    )}
+  const postureText = useMemo(() => {
+    if (data.unavailable) return '当前无法可靠判断 BTC 风险偏好。';
+    if (data.stale) return '当前是降级快照，只把 BTC 当成辅助参考。';
+    return data.recommendation.summary;
+  }, [data.recommendation.summary, data.stale, data.unavailable]);
 
-                    {/* MA 均线图例 */}
-                    <div className="flex flex-wrap gap-3 mt-3 text-xs text-[var(--text-secondary)]">
-                        <span className="flex items-center gap-1"><span className="w-3 h-0.5 bg-[#FF6B6B]"></span> MA5</span>
-                        <span className="flex items-center gap-1"><span className="w-3 h-0.5 bg-[#4ECDC4]"></span> MA10</span>
-                        <span className="flex items-center gap-1"><span className="w-3 h-0.5 bg-[#45B7D1]"></span> MA20</span>
-                        <span className="flex items-center gap-1"><span className="w-3 h-0.5 bg-[#96CEB4]"></span> MA60</span>
-                    </div>
+  const chartData = useMemo<ChartData>(() => (
+    data.kline?.candles.map((candle) => ({
+      time: candle.timestamp,
+      open: candle.open,
+      high: candle.high,
+      low: candle.low,
+      close: candle.close,
+      volume: candle.volume,
+    })) || []
+  ), [data.kline]);
 
-                    {/* 策略图例 */}
-                    <div className="flex flex-wrap gap-3 mt-3 text-xs text-[var(--text-secondary)]">
-                        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-[#ef5350]"></span> 顶(射击之星)</span>
-                        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-[#26a69a]"></span> 底(锤子线)</span>
-                        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-orange-500"></span> 假突破</span>
-                    </div>
+  const chartMarkers = useMemo<ChartMarkers>(() => (
+    data.kline?.markers?.map((marker) => ({
+      time: marker.timestamp,
+      position:
+        marker.type === 'top'
+          ? 'aboveBar'
+          : marker.type === 'bottom'
+            ? 'belowBar'
+            : 'inBar',
+      color:
+        marker.type === 'top'
+          ? '#ef5350'
+          : marker.type === 'bottom'
+            ? '#26a69a'
+            : '#f59e0b',
+      shape:
+        marker.type === 'top'
+          ? 'arrowDown'
+          : marker.type === 'bottom'
+            ? 'arrowUp'
+            : 'circle',
+      text: marker.label,
+    })) || []
+  ), [data.kline]);
 
-                    <div className="mt-3 flex justify-between text-xs text-[var(--text-secondary)]">
-                        <span>支撑: ${formatNumber(data.technical.support)}</span>
-                        <span>阻力: ${formatNumber(data.technical.resistance)}</span>
-                    </div>
-                </section>
+  return (
+    <AppShell
+      title="BTC 风险偏好"
+      subtitle="把 BTC 放回整个终端体系里：先看价格与情绪，再看结构，最后给执行方案。"
+      badge={headerBadge}
+      maxWidthClassName="max-w-6xl"
+      actions={(
+        <>
+          <Link href="/" className="btn btn-secondary px-4 py-2 text-sm">
+            返回总览
+          </Link>
+          <Link href="/chat" className="btn btn-secondary px-4 py-2 text-sm">
+            去对话
+          </Link>
+          <button type="button" onClick={() => void refreshCore(true)} className="btn btn-primary px-4 py-2 text-sm">
+            {isRefreshing ? '刷新中...' : '刷新 BTC'}
+          </button>
+        </>
+      )}
+    >
+      <ModuleShell
+        code="01"
+        eyebrow="Spot & Posture"
+        title="先看价格、情绪和当前动作"
+        summary={postureText}
+        badge={data.recommendation.overall}
+        variant="briefing"
+        motion="pulse"
+      >
+        {loading ? (
+          <div className="module-node">
+            <div className="module-node__label">Status</div>
+            <div className="module-node__title">正在载入 BTC 详情...</div>
+            <div className="module-node__copy">会先展示快照，再后台刷新结构和策略。</div>
+          </div>
+        ) : (
+          <div className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
+            <div className="module-node">
+              <div className="module-node__label">Live Price</div>
+              <div className="mt-3 text-3xl font-semibold tracking-[-0.05em] text-[var(--text-primary)]">
+                {data.unavailable || data.price <= 0 ? '--' : `$${formatNumber(data.price)}`}
+              </div>
+              <div className={`mt-3 text-sm ${data.change24h >= 0 ? 'text-[var(--accent-green)]' : 'text-[var(--accent-red)]'}`}>
+                24H {formatPercent(data.change24h)} / 7D {formatPercent(data.change7d || 0)} / 30D {formatPercent(data.change30d || 0)}
+              </div>
+              <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-[var(--text-secondary)]">
+                <span className="rounded-full border border-white/10 px-2.5 py-1 text-[11px] tracking-[0.12em] text-[var(--text-muted)]">
+                  {data.source || '未标注来源'}
+                </span>
+                {data.updatedAt ? (
+                  <span>更新于 {data.updatedAt.replace('T', ' ').slice(0, 19)}</span>
+                ) : null}
+              </div>
+              <div className="mt-4 text-sm leading-7 text-[var(--text-secondary)]">
+                {data.strategy?.summary || 'BTC 当前更像风险偏好观察器，不宜脱离整体盘面单独决策。'}
+              </div>
+            </div>
 
-                {/* 四维分析 */}
-                <AnalysisSection
-                    title="⛓️ 网络健康度"
-                    status={data.network.status}
-                    score={data.network.score}
-                    indicators={data.network.indicators}
-                    summary={data.network.summary}
-                />
+            <div className="module-kpi-grid">
+              <StatusChip label="恐贪指数" value={data.unavailable ? '--' : `${data.fearGreed}`} accent={data.fearGreed < 40 ? 'good' : 'warn'} />
+              <StatusChip label="24H 高 / 低" value={data.unavailable ? '--' : `${formatNumber(data.high24h || 0)} / ${formatNumber(data.low24h || 0)}`} />
+              <StatusChip label="支撑 / 阻力" value={`${formatNumber(data.technical.support)} / ${formatNumber(data.technical.resistance)}`} />
+              <StatusChip label="当前动作" value={data.strategy?.action || '观察'} accent="warn" />
+            </div>
+          </div>
+        )}
 
-                <AnalysisSection
-                    title="😱 市场情绪"
-                    status={data.sentiment.status}
-                    score={data.sentiment.score}
-                    indicators={data.sentiment.indicators}
-                    summary={data.sentiment.summary}
-                />
+        {error ? (
+          <div className="mt-4 rounded-[18px] border border-[rgba(255,123,136,0.2)] bg-[var(--accent-red-dim)] px-4 py-3 text-sm text-[var(--text-secondary)]">
+            当前展示的是最近一次成功结果。后台刷新失败：{error}
+          </div>
+        ) : null}
+      </ModuleShell>
 
-                <AnalysisSection
-                    title="🌍 全球市场"
-                    status={data.market.status}
-                    score={data.market.score}
-                    indicators={data.market.indicators}
-                    summary={data.market.summary}
-                />
+      <ModuleShell
+        code="02"
+        eyebrow="Structure"
+        title="再看关键位和 K 线结构"
+        badge={klineInterval}
+        variant="strategy"
+        motion="track"
+        actions={(
+          <div className="flex flex-wrap gap-2">
+            {['15m', '1H', '4H', '1D', '1W'].map((interval) => (
+              <button
+                key={interval}
+                type="button"
+                onClick={() => setKlineInterval(interval)}
+                className={interval === klineInterval ? 'btn btn-primary px-3 py-2 text-xs' : 'btn btn-secondary px-3 py-2 text-xs'}
+              >
+                {interval}
+              </button>
+            ))}
+          </div>
+        )}
+      >
+        <div className="module-node">
+          {data.kline ? (
+            <div className="overflow-hidden rounded-[22px] border border-[var(--border-color)] bg-[#101319]">
+              <KLineChart
+                data={chartData}
+                markers={chartMarkers}
+                height={360}
+                interval={klineInterval}
+                showMA
+                showVolume
+                showRSI={false}
+                showMACD={false}
+              />
+            </div>
+          ) : (
+            <KLineSkeleton height={360} />
+          )}
 
-                <AnalysisSection
-                    title="📊 技术位置"
-                    status={data.technical.status}
-                    score={data.technical.score}
-                    indicators={data.technical.indicators}
-                    summary={data.technical.summary}
-                />
-
-                {/* 综合建议区 */}
-                <section className="card bg-gradient-to-r from-orange-500/10 to-transparent border-orange-500/30">
-                    <div className="flex items-center justify-between mb-3">
-                        <h3 className="text-sm font-medium text-[var(--text-primary)]">🤖 综合判断</h3>
-                        <div className="flex items-center gap-2">
-                            <span className="text-xs text-[var(--text-secondary)]">置信度 {data.recommendation.confidence}%</span>
-                            <StatusLight status={data.recommendation.overall} />
-                        </div>
-                    </div>
-
-                    {/* 核心结论 */}
-                    <div className="p-3 bg-[var(--bg-primary)] rounded-lg mb-4">
-                        <p className="text-sm font-medium text-[var(--text-primary)] mb-2">
-                            {data.recommendation.summary}
-                        </p>
-                        <div className="space-y-1">
-                            {data.recommendation.reasoning.map((reason: any, i: number) => (
-                                <div key={i} className="text-xs text-[var(--text-secondary)]">{reason}</div>
-                            ))}
-                        </div>
-                    </div>
-
-                    {/* 三种策略建议 */}
-                    <h4 className="text-sm font-medium text-[var(--text-primary)] mb-3">📋 操作建议（含价格区间）</h4>
-                    <div className="space-y-3">
-                        {data.recommendation.strategies.map((strategy: any, i: number) => (
-                            <StrategyCard key={i} strategy={strategy} />
-                        ))}
-                    </div>
-                </section>
-
-                {/* 操作按钮 */}
-                <div className="flex gap-3">
-                    <button className="btn btn-primary flex-1">追踪BTC</button>
-                    <Link href="/chat" className="btn btn-secondary flex-1 text-center">询问AI</Link>
-                </div>
-            </main>
+          <div className="mt-4 scan-list">
+            <div className="scan-row">
+              <div className="scan-row-copy">
+                <strong>技术摘要</strong>
+                <span>{data.technical.summary}</span>
+              </div>
+              <div className="scan-row-value">{data.technical.score}/100</div>
+            </div>
+            <div className="scan-row">
+              <div className="scan-row-copy">
+                <strong>MA7 / MA30</strong>
+                <span>短中期均线位置</span>
+              </div>
+              <div className="scan-row-value">
+                {formatNumber(data.technical.ma7)} / {formatNumber(data.technical.ma30)}
+              </div>
+            </div>
+          </div>
         </div>
-    );
+      </ModuleShell>
+
+      <ModuleShell
+        code="03"
+        eyebrow="Evidence"
+        title="最后确认四个因子是否同向"
+        badge="4 Factors"
+        variant="evidence"
+        motion="scan"
+      >
+        <div className="module-columns xl:grid-cols-2">
+          <FactorBlock
+            title="情绪"
+            score={data.sentiment?.score || 0}
+            summary={data.sentiment?.summary || '情绪模块暂未就绪。'}
+            indicators={data.sentiment?.indicators || []}
+          />
+          <FactorBlock
+            title="技术"
+            score={data.technical.score}
+            summary={data.technical.summary}
+            indicators={data.technical.indicators}
+          />
+          <FactorBlock
+            title="网络"
+            score={data.network?.score || 0}
+            summary={data.network?.summary || '网络模块暂未就绪。'}
+            indicators={data.network?.indicators || []}
+          />
+          <FactorBlock
+            title="全球市场"
+            score={data.market?.score || 0}
+            summary={data.market?.summary || '全球市场模块暂未就绪。'}
+            indicators={data.market?.indicators || []}
+          />
+        </div>
+      </ModuleShell>
+
+      <ModuleShell
+        code="04"
+        eyebrow="Action Plan"
+        title="把判断变成可执行方案"
+        summary="这里只保留三种最实用的执行路径，不再把 BTC 页面做成另一个独立宇宙。"
+        badge={`${data.recommendation.confidence}%`}
+        variant="execution"
+        motion="pulse"
+      >
+        <div className="module-node">
+          <div className="module-node__label">Main Judgment</div>
+          <div className="module-node__title">{data.recommendation.summary}</div>
+          <div className="mt-4 scan-list">
+            {data.recommendation.reasoning.map((reason) => (
+              <div key={reason} className="scan-row">
+                <div className="scan-row-copy">
+                  <strong>依据</strong>
+                  <span>{reason}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="module-columns xl:grid-cols-3">
+          {data.recommendation.strategies.map((strategy) => (
+            <StrategyLane key={strategy.label} strategy={strategy} />
+          ))}
+        </div>
+      </ModuleShell>
+    </AppShell>
+  );
 }

@@ -17,7 +17,7 @@ export interface FetchOptions {
   timeout?: number;
   retries?: number;
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
-  body?: Record<string, unknown> | string | number | boolean | null;
+  body?: unknown;
   headers?: Record<string, string>;
 }
 
@@ -36,7 +36,9 @@ export interface BtcSummary {
   fearGreed: number;
   fearGreedLabel: string;
   source?: string;
+  updatedAt?: string;
   stale?: boolean;
+  unavailable?: boolean;
   strategy?: BtcStrategy;
 }
 
@@ -195,7 +197,11 @@ export interface StockMarket {
   status: 'bull' | 'neutral' | 'bear' | 'bullish' | 'bearish';
   canOperate: boolean;
   stale?: boolean;
+  statsUnavailable?: boolean;
   summary?: string;
+  statsSource?: string;
+  statsAsOf?: string;
+  providerHint?: string;
   index: {
     name: string;
     value: number;
@@ -204,6 +210,11 @@ export interface StockMarket {
   breadth: number;
   volume: number;
   northFlow: number;
+  capitalFlow?: {
+    net: number;
+    status: 'inflow' | 'outflow' | 'neutral' | string;
+    focus?: string;
+  };
   limitUp: number;
   limitDown?: number;
 }
@@ -254,6 +265,28 @@ export interface StockDetail extends StockQuote {
 
 export interface MacroDashboard {
   timestamp: string;
+  news_brief?: Array<{
+    title: string;
+    source: string;
+    impact: string;
+  }>;
+  cycle_framework?: {
+    secular: string;
+    cyclical: string;
+    tactical: string;
+    summary: string;
+  };
+  long_term_view?: {
+    stance: string;
+    themes: string[];
+    rationale: string;
+  };
+  short_term_view?: {
+    stance: string;
+    focus: string[];
+    rationale: string;
+    risk_trigger?: string;
+  };
   macro_mainline: {
     cycle_stage: string;
     narrative: string;
@@ -279,6 +312,27 @@ export interface MacroDashboard {
   };
 }
 
+export interface ChatProviderModel {
+  id: string;
+  label: string;
+}
+
+export interface ChatProviderOption {
+  id: string;
+  label: string;
+  description?: string;
+  default_model: string;
+  api_key_label: string;
+  api_key_placeholder: string;
+  requires_base_url?: boolean;
+  base_url_placeholder?: string;
+  models: ChatProviderModel[];
+}
+
+export interface ChatProviderCatalogResponse {
+  providers: ChatProviderOption[];
+}
+
 export interface ChatCompletionRequest {
   messages: Array<{
     role: 'system' | 'user' | 'assistant';
@@ -287,9 +341,25 @@ export interface ChatCompletionRequest {
   provider?: string;
   api_key?: string;
   model?: string;
+  base_url?: string;
 }
 
 export interface ChatCompletionResponse {
+  reply: string;
+  provider: string;
+  model: string;
+  used_api: boolean;
+}
+
+export interface ChatProviderTestRequest {
+  provider?: string;
+  api_key?: string;
+  model?: string;
+  base_url?: string;
+}
+
+export interface ChatProviderTestResponse {
+  status: 'success';
   reply: string;
   provider: string;
   model: string;
@@ -321,11 +391,21 @@ export interface CommanderReview {
   status: string;
   accuracy?: string;
   summary?: string;
+  learning_summary?: string;
+  diagnosis?: {
+    label: string;
+    reason: string;
+    failed_link?: string;
+    next_action?: string;
+  };
   details?: Array<{
     code: string;
     name: string;
     change: number;
     result: string;
+    lane?: string;
+    theme?: string;
+    priority?: string;
   }>;
 }
 
@@ -339,17 +419,140 @@ export interface CommanderLogic {
   us_mapping?: string;
 }
 
+export interface CommanderNewsItem {
+  title: string;
+  source: string;
+  time: string;
+  heat_score: number;
+  tags: string[];
+  importance?: 'primary' | 'secondary' | 'risk' | string;
+  event_type?: string;
+  horizon?: string;
+  why_it_matters?: string;
+  source_tier?: string;
+  confidence?: string;
+  column?: string;
+}
+
+export interface CommanderNewsAnalysis {
+  summary: string;
+  headline?: string;
+  lead_event?: string;
+  market_implication?: string;
+  primary_news: CommanderNewsItem[];
+  secondary_news: CommanderNewsItem[];
+  risk_news: CommanderNewsItem[];
+  impact_factors: string[];
+  event_path?: string[];
+  watch_points?: string[];
+  topic_clusters?: Array<{
+    name: string;
+    count: number;
+    stance: string;
+    takeaway: string;
+  }>;
+}
+
+export interface CommanderFactorItem {
+  name: string;
+  score: number;
+  detail: string;
+}
+
+export interface CommanderFactorEngine {
+  stage: string;
+  score: number;
+  note: string;
+  factors: CommanderFactorItem[];
+  signals?: Array<{
+    name: string;
+    value: string;
+    verdict: string;
+  }>;
+}
+
+export interface CommanderTradeFilter {
+  state: '真启动' | '仅观察' | '拉高出货' | string;
+  reason: string;
+  guidance: string;
+  risk_level?: 'low' | 'medium' | 'high' | string;
+  evidence?: string[];
+}
+
+export interface CommanderStrategicView {
+  stance: string;
+  themes?: string[];
+  focus?: string[];
+  rationale: string;
+  risk_trigger?: string;
+}
+
 export interface CommanderStock {
   priority: string;
   stock: string;
   code: string;
+  lane?: string;
+  theme?: string;
   auction_price: string;
   auction_status: string;
   tactic: string;
+  actionability?: '可执行' | '仅观察' | '放弃' | string;
+  execution_note?: string;
+  risk_note?: string;
+  score?: number;
+}
+
+export interface CommanderLearningItem {
+  theme?: string;
+  code?: string;
+  name?: string;
+  lane: string;
+  accuracy: number;
+  wins: number;
+  total: number;
+  score: number;
+}
+
+export interface CommanderLearningFeedback {
+  summary: string;
+  window_days: number;
+  theme_scores: {
+    attack: Record<string, number>;
+    defense: Record<string, number>;
+  };
+  stock_scores: Record<string, number>;
+  top_themes: CommanderLearningItem[];
+  risk_themes: CommanderLearningItem[];
+  top_stocks: CommanderLearningItem[];
+  risk_stocks: CommanderLearningItem[];
+}
+
+export interface CommanderSnapshotMeta {
+  key: string;
+  state: 'fresh' | 'stale' | 'boot' | 'expired' | string;
+  updated_at?: string;
+  age_seconds?: number;
+  refreshing?: boolean;
+  ttl_seconds?: number;
+  max_stale_seconds?: number;
+}
+
+export interface CommanderVerificationMeta {
+  status?: 'verified' | 'verifying' | 'pending_data' | 'waiting_market' | 'failed' | 'skipped' | 'queued' | string;
+  message?: string;
+  last_attempt_at?: string;
+  last_success_at?: string;
+  retry_after?: string | null;
+  verify_date?: string;
+  last_error?: string;
+  accuracy?: number;
+  total?: number;
+  updated_at?: string;
 }
 
 export interface CommanderOrder {
   timestamp: string;
+  snapshot_meta?: CommanderSnapshotMeta;
   context: {
     current_phase: string;
     label: string;
@@ -358,6 +561,13 @@ export interface CommanderOrder {
   };
   battle_weather: CommanderWeather;
   yesterday_review: CommanderReview;
+  news_analysis?: CommanderNewsAnalysis;
+  factor_engine?: CommanderFactorEngine;
+  trade_filter?: CommanderTradeFilter;
+  strategic_views?: {
+    long_term: CommanderStrategicView;
+    short_term: CommanderStrategicView;
+  };
   today_mainlines: {
     logic_a: CommanderLogic;
     logic_b: CommanderLogic;
@@ -367,6 +577,7 @@ export interface CommanderOrder {
     attack: CommanderStock[];
     defense: CommanderStock[];
   };
+  learning_feedback?: CommanderLearningFeedback;
   commander_tips: {
     position: {
       attack: number;
@@ -377,6 +588,7 @@ export interface CommanderOrder {
     current_phase?: string;
     phase_label?: string;
     action_now?: string;
+    trade_state?: string;
     risk_flags?: string[];
     execution_windows?: Array<{
       phase: string;
@@ -395,8 +607,16 @@ export interface CommanderOrder {
 
 export interface CommanderSummary {
   timestamp: string;
+  snapshot_meta?: CommanderSnapshotMeta;
   weather: CommanderWeather;
   review: CommanderReview;
+  news_analysis?: CommanderNewsAnalysis;
+  factor_engine?: CommanderFactorEngine;
+  trade_filter?: CommanderTradeFilter;
+  strategic_views?: {
+    long_term: CommanderStrategicView;
+    short_term: CommanderStrategicView;
+  };
   mainlines: {
     logic_a: CommanderLogic;
     logic_b: CommanderLogic;
@@ -422,13 +642,16 @@ export interface CommanderSummary {
     correct: number;
     days: number;
   };
+  learning_feedback?: CommanderLearningFeedback;
   recent_records: Array<{
     date: string;
     logic_a?: CommanderLogic;
     logic_b?: CommanderLogic;
     verified: boolean;
+    verification_meta?: CommanderVerificationMeta;
     verify_result?: {
       accuracy: number;
+      verify_date?: string;
     };
   }>;
 }
@@ -438,15 +661,26 @@ export interface CommanderHistoryRecord {
   logic_a?: CommanderLogic;
   logic_b?: CommanderLogic;
   verified: boolean;
+  verification_meta?: CommanderVerificationMeta;
   verify_result?: {
     total: number;
     correct: number;
     accuracy: number;
+    verify_date?: string;
+    attribution?: {
+      label: string;
+      reason: string;
+      failed_link?: string;
+      next_action?: string;
+    };
     stocks?: Array<{
       code: string;
       name: string;
       change: number;
       result: string;
+      lane?: string;
+      theme?: string;
+      priority?: string;
     }>;
   };
 }
@@ -456,15 +690,27 @@ export interface CommanderReviewDetail {
   logic_a?: CommanderLogic;
   logic_b?: CommanderLogic;
   verified: boolean;
+  verification_meta?: CommanderVerificationMeta;
+  learning_feedback?: CommanderLearningFeedback;
   verify_result?: {
     total: number;
     correct: number;
     accuracy: number;
+    verify_date?: string;
+    attribution?: {
+      label: string;
+      reason: string;
+      failed_link?: string;
+      next_action?: string;
+    };
     stocks?: Array<{
       code: string;
       name: string;
       change: number;
       result: string;
+      lane?: string;
+      theme?: string;
+      priority?: string;
     }>;
   } | null;
 }

@@ -1,22 +1,13 @@
 # -*- coding: utf-8 -*-
-import os
 import logging
+from datetime import datetime
 import pandas as pd
 from typing import Optional, List, Dict, Any
+import requests
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
 from .base import BaseFetcher, DataFetchError
 from tenacity import retry, stop_after_attempt, wait_fixed
-
-# ========= 强制禁用代理 (Copied from stock_service.py) =========
-for key in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy"]:
-    os.environ.pop(key, None)
-os.environ["NO_PROXY"] = "*"
-
-# Monkey patch urllib3
-try:
-    import urllib3.util.proxy
-    urllib3.util.proxy.connection_from_url = lambda *a, **kw: {}
-except ImportError:
-    pass
+from ..core.outbound_network import build_request_kwargs
 
 import akshare as ak
 
@@ -28,6 +19,45 @@ class AKShareFetcher(BaseFetcher):
     """
     name: str = "AKShareFetcher"
     priority: int = 2
+
+    def _fetch_eastmoney_market_page(self, page: int, page_size: int = 100) -> Dict[str, Any]:
+        url = "http://push2.eastmoney.com/api/qt/clist/get"
+        params = {
+            "pn": str(page),
+            "pz": str(page_size),
+            "po": "1",
+            "np": "1",
+            "ut": "bd1d9ddb04089700cf9c27f6f7426281",
+            "fltt": "2",
+            "invt": "2",
+            "fid": "f3",
+            "fs": "m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048",
+            "fields": "f3,f12,f14",
+        }
+        headers = {
+            "User-Agent": "Mozilla/5.0",
+            "Referer": "https://quote.eastmoney.com/",
+        }
+        response = requests.get(
+            url,
+            headers=headers,
+            params=params,
+            **build_request_kwargs(6.0, use_proxy=False),
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def _run_with_timeout(self, fn, timeout: float, default):
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(fn)
+            try:
+                return future.result(timeout=timeout)
+            except FuturesTimeoutError:
+                logger.warning(f"Timed out waiting for {getattr(fn, '__name__', 'callable')}")
+                return default
+            except Exception as exc:
+                logger.warning(f"{getattr(fn, '__name__', 'callable')} failed: {exc}")
+                return default
 
     def fetch_market_indices(self) -> Optional[Dict[str, Any]]:
         try:
@@ -225,24 +255,89 @@ class AKShareFetcher(BaseFetcher):
 
     def fetch_market_stats(self) -> Dict[str, int]:
         """获取全市场统计数据 (涨跌家数、涨跌停)"""
-        # CRITICAL: stock_zh_a_spot_em() is extremely slow (~60s), causing backend to hang.
-        # Temporarily returning estimates or 0 to restore service.
-        # TODO: Implement caching or find a faster API (e.g. EastMoney summary).
-        
-        return {
-            "up_count": 0,
-            "down_count": 0,
-            "flat_count": 0,
-            "limit_up": 0,
-            "limit_down": 0,
-            "median_change": 0.0,
-            "northFlow": self._get_realtime_north_flow() # Keep North Flow as it might be faster?
-        }
-        
-        # Disabled slow code:
-        # try:
-        #     df = ak.stock_zh_a_spot_em()
-        #     # ...
+        try:
+            first_page = self._fetch_eastmoney_market_page(page=1, page_size=200)
+            first_data = first_page.get("data") or {}
+            total = int(first_data.get("total", 0) or 0)
+            first_diff = first_data.get("diff") or []
+            if not first_diff:
+                raise ValueError("empty eastmoney market stats")
+
+            page_size = len(first_diff) or 200
+            pages = max(1, (total + page_size - 1) // page_size) if total else 1
+            diff = list(first_diff)
+            if pages > 1:
+                with ThreadPoolExecutor(max_workers=6) as executor:
+                    futures = [
+                        executor.submit(self._fetch_eastmoney_market_page, page, page_size)
+                        for page in range(2, pages + 1)
+                    ]
+                    for future in as_completed(futures):
+                        page_json = future.result()
+                        page_diff = (page_json.get("data") or {}).get("diff") or []
+                        if page_diff:
+                            diff.extend(page_diff)
+
+            changes = []
+            up_count = 0
+            down_count = 0
+            flat_count = 0
+            limit_up = 0
+            limit_down = 0
+
+            for item in diff:
+                raw_change = item.get("f3")
+                if raw_change in (None, "-", ""):
+                    continue
+                try:
+                    change = float(raw_change)
+                except Exception:
+                    continue
+                changes.append(change)
+                if change > 0:
+                    up_count += 1
+                elif change < 0:
+                    down_count += 1
+                else:
+                    flat_count += 1
+                if change >= 9.5:
+                    limit_up += 1
+                elif change <= -9.5:
+                    limit_down += 1
+
+            if not changes:
+                raise ValueError("no valid market stat changes")
+
+            median_change = round(float(pd.Series(changes).median()), 2)
+            north_flow = self._run_with_timeout(self._get_realtime_north_flow, 3.0, 0.0)
+
+            # Use dedicated zt pool when available to avoid undercounting board-strength
+            today = datetime.now().strftime("%Y%m%d")
+            try:
+                zt_df = self._run_with_timeout(lambda: ak.stock_zt_pool_em(date=today), 3.0, None)
+                if zt_df is not None and not zt_df.empty:
+                    limit_up = len(zt_df)
+            except Exception as zt_exc:
+                logger.warning(f"Fast limit-up pool unavailable: {zt_exc}")
+            try:
+                dt_df = self._run_with_timeout(lambda: ak.stock_zt_pool_dtgc_em(date=today), 3.0, None)
+                if dt_df is not None and not dt_df.empty:
+                    limit_down = len(dt_df)
+            except Exception as dt_exc:
+                logger.warning(f"Fast limit-down pool unavailable: {dt_exc}")
+
+            return {
+                "up_count": up_count,
+                "down_count": down_count,
+                "flat_count": flat_count,
+                "limit_up": limit_up,
+                "limit_down": limit_down,
+                "median_change": median_change,
+                "northFlow": north_flow,
+            }
+        except Exception as e:
+            logger.error(f"AKShare fast market stats error: {e}")
+            raise DataFetchError(str(e))
 
 
     def fetch_macro_data(self) -> Dict:

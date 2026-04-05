@@ -11,6 +11,10 @@ def get_market_environment():
         raise HTTPException(status_code=503, detail="Failed to fetch market data")
     return data
 
+@router.get("/system/health")
+def get_data_source_health():
+    return stock_service.get_data_health()
+
 @router.get("/selection")
 def get_hot_concepts():
     """获取热门概念板块 (AKShare)"""

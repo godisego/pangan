@@ -41,6 +41,10 @@ Thumbs.db
 # Logs
 *.log
 backend.log
+runtime/
+
+# Runtime data
+app/data_cache/
 
 # Testing
 .pytest_cache/

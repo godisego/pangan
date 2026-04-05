@@ -79,3 +79,10 @@ class BaseFetcher(ABC):
             Dict: {code: {name, price, change, volume, ...}}
         """
         pass
+
+    def fetch_market_stats(self) -> Optional[Dict[str, Any]]:
+        """
+        获取市场统计快照（涨跌家数、涨跌停、广度等）。
+        非所有 provider 都必须实现；未实现时返回 None。
+        """
+        return None

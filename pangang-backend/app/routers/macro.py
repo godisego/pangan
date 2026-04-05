@@ -2,6 +2,7 @@ from fastapi import APIRouter, Header, HTTPException
 from ..services.macro_analyzer import macro_analyzer
 import time
 from typing import Optional, Dict, Any
+from ..core.ai_provider_registry import normalize_provider
 
 router = APIRouter(tags=["macro"])
 
@@ -17,14 +18,14 @@ def _resolve_macro_overrides(
     provider: Optional[str],
     api_key: Optional[str],
     model: Optional[str],
+    base_url: Optional[str],
 ) -> Dict[str, Optional[str]]:
-    selected_provider = (provider or "zhipu").lower()
-    if selected_provider not in {"zhipu", ""}:
-        return {"provider": selected_provider, "api_key": None, "model": None}
+    selected_provider = normalize_provider(provider) or "zhipu"
     return {
-        "provider": "zhipu",
+        "provider": selected_provider,
         "api_key": api_key,
         "model": model,
+        "base_url": base_url,
     }
 
 @router.get("/dashboard")
@@ -32,6 +33,7 @@ async def get_macro_dashboard(
     x_ai_provider: Optional[str] = Header(default=None),
     x_ai_api_key: Optional[str] = Header(default=None),
     x_ai_model: Optional[str] = Header(default=None),
+    x_ai_base_url: Optional[str] = Header(default=None),
 ):
     """
     Get the full Macro Strategy Dashboard (Mainline, Catalysts, Defense).
@@ -39,7 +41,7 @@ async def get_macro_dashboard(
     Uses 60-second cache to reduce AI API calls and improve response time.
     """
     global _cache, CACHE_TTL
-    overrides = _resolve_macro_overrides(x_ai_provider, x_ai_api_key, x_ai_model)
+    overrides = _resolve_macro_overrides(x_ai_provider, x_ai_api_key, x_ai_model, x_ai_base_url)
 
     # Return cached data if still valid
     if not overrides["api_key"] and _cache["data"] and (time.time() - _cache["timestamp"]) < CACHE_TTL:
@@ -47,8 +49,10 @@ async def get_macro_dashboard(
 
     # Generate fresh data
     data = await macro_analyzer.generate_strategy_dashboard(
+        provider=overrides["provider"],
         api_key=overrides["api_key"],
         model=overrides["model"],
+        base_url=overrides["base_url"],
     )
     if not data:
         raise HTTPException(status_code=503, detail="Failed to generate macro dashboard")
@@ -65,12 +69,15 @@ async def get_macro_mainline(
     x_ai_provider: Optional[str] = Header(default=None),
     x_ai_api_key: Optional[str] = Header(default=None),
     x_ai_model: Optional[str] = Header(default=None),
+    x_ai_base_url: Optional[str] = Header(default=None),
 ):
     """Get only the macro mainline analysis"""
-    overrides = _resolve_macro_overrides(x_ai_provider, x_ai_api_key, x_ai_model)
+    overrides = _resolve_macro_overrides(x_ai_provider, x_ai_api_key, x_ai_model, x_ai_base_url)
     dashboard = await macro_analyzer.generate_strategy_dashboard(
+        provider=overrides["provider"],
         api_key=overrides["api_key"],
         model=overrides["model"],
+        base_url=overrides["base_url"],
     )
     return dashboard.get("macro_mainline", {})
 
@@ -79,12 +86,15 @@ async def get_catalysts(
     x_ai_provider: Optional[str] = Header(default=None),
     x_ai_api_key: Optional[str] = Header(default=None),
     x_ai_model: Optional[str] = Header(default=None),
+    x_ai_base_url: Optional[str] = Header(default=None),
 ):
     """Get news catalysts"""
-    overrides = _resolve_macro_overrides(x_ai_provider, x_ai_api_key, x_ai_model)
+    overrides = _resolve_macro_overrides(x_ai_provider, x_ai_api_key, x_ai_model, x_ai_base_url)
     dashboard = await macro_analyzer.generate_strategy_dashboard(
+        provider=overrides["provider"],
         api_key=overrides["api_key"],
         model=overrides["model"],
+        base_url=overrides["base_url"],
     )
     return dashboard.get("catalysts", [])
 

@@ -16,6 +16,9 @@ import type {
   MacroTrending,
   ChatCompletionRequest,
   ChatCompletionResponse,
+  ChatProviderCatalogResponse,
+  ChatProviderTestRequest,
+  ChatProviderTestResponse,
   NotificationRequest,
   NotificationResponse,
   HealthCheck,
@@ -119,8 +122,19 @@ async function fetchApi<T>(
       });
 
       if (!response.ok) {
+        let errorMessage = `API Error: ${response.statusText}`;
+        try {
+          const errorPayload = await response.json();
+          if (errorPayload?.detail) {
+            errorMessage = String(errorPayload.detail);
+          } else if (errorPayload?.message) {
+            errorMessage = String(errorPayload.message);
+          }
+        } catch {
+          // ignore json parse errors for non-json error bodies
+        }
         throw new ApiError(
-          `API Error: ${response.statusText}`,
+          errorMessage,
           response.status,
           endpoint
         );
@@ -192,6 +206,15 @@ async function fetchSameOriginApi<T>(
       return data as T;
     } catch (error) {
       lastError = error as Error;
+
+      // Local Next.js proxy can be flaky in dev; fall back to direct backend.
+      if (attempt === retries) {
+        try {
+          return await fetchApi<T>(endpoint, { timeout, retries: 0, method, body, headers });
+        } catch (fallbackError) {
+          lastError = fallbackError as Error;
+        }
+      }
 
       if (error instanceof ApiError && error.statusCode && error.statusCode >= 400 && error.statusCode < 500) {
         throw error;
@@ -318,13 +341,14 @@ export const macroApi = {
   /**
    * Get macro dashboard data
    */
-  getDashboard: (aiConfig?: { provider?: string; apiKey?: string; model?: string }): Promise<MacroDashboard> =>
+  getDashboard: (aiConfig?: { provider?: string; apiKey?: string; model?: string; baseUrl?: string }): Promise<MacroDashboard> =>
     fetchApi<MacroDashboard>('/api/macro/dashboard', {
       timeout: 60000,
       headers: aiConfig?.apiKey ? {
         'x-ai-provider': aiConfig.provider || 'zhipu',
         'x-ai-api-key': aiConfig.apiKey,
         'x-ai-model': aiConfig.model || 'glm-4.7-flash',
+        ...(aiConfig.baseUrl ? { 'x-ai-base-url': aiConfig.baseUrl } : {}),
       } : {}
     }),
 
@@ -336,11 +360,25 @@ export const macroApi = {
 };
 
 export const chatApi = {
+  getProviders: (): Promise<ChatProviderCatalogResponse> =>
+    fetchApi<ChatProviderCatalogResponse>('/api/chat/providers', {
+      timeout: 12000,
+      retries: 0,
+    }),
+
+  testConfig: (payload: ChatProviderTestRequest): Promise<ChatProviderTestResponse> =>
+    fetchApi<ChatProviderTestResponse>('/api/chat/test', {
+      method: 'POST',
+      body: payload,
+      timeout: 45000,
+      retries: 0,
+    }),
+
   send: (payload: ChatCompletionRequest): Promise<ChatCompletionResponse> =>
     fetchApi<ChatCompletionResponse>('/api/chat', {
       method: 'POST',
       body: payload,
-      timeout: 30000,
+      timeout: 90000,
       retries: 0,
     })
 };
@@ -387,7 +425,7 @@ export const commanderApi = {
 
   getSummary: async (): Promise<CommanderSummary> => {
     const response = await fetchSameOriginApi<{ status: string; data: CommanderSummary }>('/api/commander/summary', {
-      timeout: 5000,
+      timeout: 10000,
       retries: 0,
     });
     return response.data;
@@ -395,7 +433,7 @@ export const commanderApi = {
 
   getHistory: async (limit: number = 10): Promise<CommanderHistoryRecord[]> => {
     const response = await fetchSameOriginApi<{ status: string; data: CommanderHistoryRecord[] }>(`/api/commander/history?limit=${limit}`, {
-      timeout: 5000,
+      timeout: 12000,
       retries: 0,
     });
     return response.data;
@@ -403,7 +441,7 @@ export const commanderApi = {
 
   getReviewByDate: async (date: string): Promise<CommanderReviewDetail | null> => {
     const response = await fetchSameOriginApi<{ status: string; data: CommanderReviewDetail | null }>(`/api/commander/review/${date}`, {
-      timeout: 5000,
+      timeout: 12000,
       retries: 0,
     });
     return response.data;

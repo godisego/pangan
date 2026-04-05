@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import copy
 import logging
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from typing import Any, Dict, List, Optional, Tuple
@@ -8,6 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 
 from ..data_provider import DataFetcherManager
+from ..core.state_store import state_store
 
 logger = logging.getLogger(__name__)
 
@@ -128,16 +130,46 @@ class StockService:
                 return fallback
             return self._default_market_snapshot()
 
+    def get_data_health(self) -> Dict[str, Any]:
+        snapshots = state_store.list_json_namespace("market_snapshots")
+        stats_snapshot = snapshots.get("stats_cache") if isinstance(snapshots, dict) else None
+        return {
+            "providers": state_store.get_provider_health(),
+            "snapshots": snapshots,
+            "marketStatsChain": {
+                "order": ["local_snapshot", "SinaFetcher", "TushareFetcher", "AKShareFetcher"],
+                "current_source": (stats_snapshot or {}).get("source", ""),
+                "current_as_of": (stats_snapshot or {}).get("as_of", ""),
+                "current_stale": bool((stats_snapshot or {}).get("stale", True)),
+            },
+        }
+
     def _normalize_market_indices(self, data: dict) -> dict:
+        tushare_configured = bool((os.getenv("TUSHARE_TOKEN") or "").strip())
         index = data.get("index", {})
         change = float(index.get("change", 0) or 0)
         volume = int(data.get("volume", 0) or 0)
         breadth = int(data.get("breadth", 50) or 50)
         north_flow = float(data.get("northFlow", 0) or 0)
         limit_up = int(
-            data.get("limitUp", data.get("limit_up", data.get("limit_up_count", 0) or 0))
+            data.get("limit_up", data.get("limitUp", data.get("limit_up_count", 0) or 0))
         )
+        stats_source = str(data.get("source", "") or "")
         status = data.get("status", "neutral")
+        capital_flow = data.get("capitalFlow") or {
+            "net": round(north_flow, 2),
+            "status": "inflow" if north_flow > 0 else "outflow" if north_flow < 0 else "neutral",
+            "focus": "北向资金" if north_flow else "",
+        }
+
+        if stats_source == "TushareFetcher":
+            provider_hint = "当前市场统计由 Tushare 增强源提供。"
+        elif not tushare_configured:
+            provider_hint = "当前未配置 Tushare，系统已自动切换到免费公开源与本地快照。"
+        elif stats_source == "local_snapshot":
+            provider_hint = "当前使用本地快照，后台会继续尝试刷新实时统计源。"
+        else:
+            provider_hint = "当前优先使用免费公开源，Tushare 作为可选增强后备。"
 
         return {
             "index": {
@@ -149,16 +181,38 @@ class StockService:
             "indices": data.get("indices", []),
             "volume": volume,
             "northFlow": round(north_flow, 2),
+            "capitalFlow": {
+                "net": round(float(capital_flow.get("net", 0) or 0), 2),
+                "status": str(capital_flow.get("status", "neutral") or "neutral"),
+                "focus": str(capital_flow.get("focus", "") or ""),
+            },
             "breadth": breadth,
             "up_count": int(data.get("up_count", 0) or 0),
             "down_count": int(data.get("down_count", 0) or 0),
             "flat_count": int(data.get("flat_count", 0) or 0),
             "limitUp": limit_up,
-            "limitDown": int(data.get("limitDown", data.get("limit_down", data.get("limit_down_count", 0) or 0))),
+            "limitDown": int(data.get("limit_down", data.get("limitDown", data.get("limit_down_count", 0) or 0))),
             "status": status,
-            "summary": data.get("summary", "市场快照"),
+            "summary": (
+                "指数已就绪，市场统计暖机中"
+                if (
+                    int(data.get("up_count", 0) or 0) == 0
+                    and int(data.get("down_count", 0) or 0) == 0
+                    and int(data.get("flat_count", 0) or 0) == 0
+                )
+                else data.get("summary", "市场快照")
+            ),
             "canOperate": status in ["bull", "bullish"] or (change >= 0 and breadth >= 50),
-            "stale": bool(data.get("stale", False))
+            "stale": bool(data.get("stale", False)),
+            "statsSource": stats_source,
+            "statsAsOf": str(data.get("as_of", "") or ""),
+            "providerHint": provider_hint,
+            "statsUnavailable": (
+                int(data.get("up_count", 0) or 0) == 0
+                and int(data.get("down_count", 0) or 0) == 0
+                and int(data.get("limit_up", data.get("limitUp", data.get("limit_up_count", 0) or 0)) or 0) == 0
+                and int(data.get("limit_down", data.get("limitDown", data.get("limit_down_count", 0) or 0)) or 0) == 0
+            )
         }
 
     def _default_market_snapshot(self) -> dict:
@@ -172,6 +226,11 @@ class StockService:
             "indices": [],
             "volume": 0,
             "northFlow": 0,
+            "capitalFlow": {
+                "net": 0,
+                "status": "neutral",
+                "focus": "",
+            },
             "breadth": 50,
             "up_count": 0,
             "down_count": 0,
@@ -179,9 +238,13 @@ class StockService:
             "limitUp": 0,
             "limitDown": 0,
             "status": "neutral",
-            "summary": "使用默认市场快照",
+            "summary": "市场统计暂不可用，当前只保留基础指数快照",
             "canOperate": False,
-            "stale": True
+            "stale": True,
+            "statsSource": "",
+            "statsAsOf": "",
+            "providerHint": "当前未配置 Tushare，系统只使用免费公开源和缓存快照。",
+            "statsUnavailable": True
         }
 
     def get_hot_concepts(self):

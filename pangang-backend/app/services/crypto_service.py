@@ -2,9 +2,11 @@ import requests
 import pandas as pd
 from datetime import datetime
 import time
+from ..core.outbound_network import build_request_kwargs, ensure_outbound_proxy_env
 
 class CryptoService:
     def __init__(self):
+        ensure_outbound_proxy_env()
         self.binance_api_url = "https://api.binance.com/api/v3"
         self.fng_api_url = "https://api.alternative.me/fng/"
         # Simple in-memory cache
@@ -13,7 +15,7 @@ class CryptoService:
             'klines': {'data': None, 'timestamp': 0},
             'fear_greed': {'data': None, 'timestamp': 0}
         }
-        self.SUMMARY_CACHE_DURATION = 20
+        self.SUMMARY_CACHE_DURATION = 45
         self.FEAR_GREED_CACHE_DURATION = 300
         
         # Circuit Breaker for Binance
@@ -34,7 +36,9 @@ class CryptoService:
             "fearGreed": 50,
             "fearGreedLabel": "Neutral",
             "source": "Fallback Snapshot",
+            "updatedAt": datetime.now().isoformat(),
             "stale": True,
+            "unavailable": True,
             "strategy": {
                 "overall": "neutral",
                 "summary": "实时行情暂不可用，当前展示为降级快照，请稍后刷新确认。",
@@ -55,6 +59,8 @@ class CryptoService:
                 fallback = dict(cached)
                 fallback['stale'] = True
                 fallback['source'] = f"{fallback.get('source', 'Unknown')} (cooldown)"
+                fallback['unavailable'] = fallback.get('price', 0) == 0
+                fallback['updatedAt'] = fallback.get('updatedAt') or datetime.now().isoformat()
                 return fallback
             return self._default_summary_snapshot()
 
@@ -65,25 +71,47 @@ class CryptoService:
         volume24h = 0
         source = "Unknown"
         
-        # 1. 首页摘要必须轻量，优先走一个快接口
+        # 1. 优先走稳定的大交易所快接口
         try:
-            okx_url = "https://www.okx.com/api/v5/market/ticker?instId=BTC-USDT"
-            okx_res = requests.get(okx_url, timeout=0.8)
-            okx_data = okx_res.json()
-            
-            if okx_data.get('code') == '0' and okx_data.get('data'):
-                ticker = okx_data['data'][0]
-                price = float(ticker['last'])
-                open24h = float(ticker['open24h'])
+            binance_url = f"{self.binance_api_url}/ticker/24hr"
+            binance_res = requests.get(
+                binance_url,
+                params={"symbol": "BTCUSDT"},
+                **build_request_kwargs(4.0),
+            )
+            binance_data = binance_res.json()
+
+            if isinstance(binance_data, dict) and binance_data.get("lastPrice"):
+                price = float(binance_data["lastPrice"])
+                open24h = float(binance_data["openPrice"])
                 change24h = round((price - open24h) / open24h * 100, 2)
-                high24h = float(ticker['high24h'])
-                low24h = float(ticker['low24h'])
-                volume24h = float(ticker['volCcy24h']) / 1000000000  # 转为十亿美元
-                source = "OKX"
+                high24h = float(binance_data["highPrice"])
+                low24h = float(binance_data["lowPrice"])
+                volume24h = float(binance_data.get("quoteVolume", 0)) / 1000000000
+                source = "Binance"
         except Exception as e:
-            print(f"OKX API failed: {e}, trying fallback...")
+            print(f"Binance API failed: {e}, trying fallback...")
+
+        # 2. 首页摘要继续尝试 OKX
+        if price == 0:
+            try:
+                okx_url = "https://www.okx.com/api/v5/market/ticker?instId=BTC-USDT"
+                okx_res = requests.get(okx_url, **build_request_kwargs(3.5))
+                okx_data = okx_res.json()
+
+                if okx_data.get('code') == '0' and okx_data.get('data'):
+                    ticker = okx_data['data'][0]
+                    price = float(ticker['last'])
+                    open24h = float(ticker['open24h'])
+                    change24h = round((price - open24h) / open24h * 100, 2)
+                    high24h = float(ticker['high24h'])
+                    low24h = float(ticker['low24h'])
+                    volume24h = float(ticker['volCcy24h']) / 1000000000  # 转为十亿美元
+                    source = "OKX"
+            except Exception as e:
+                print(f"OKX API failed: {e}, trying fallback...")
         
-        # 2. Fallback to CoinGecko only when necessary
+        # 3. Fallback to CoinGecko only when necessary
         if price == 0:
             try:
                 cg_url = "https://api.coingecko.com/api/v3/simple/price"
@@ -93,7 +121,7 @@ class CryptoService:
                     "include_24hr_vol": "true",
                     "include_24hr_change": "true"
                 }
-                res = requests.get(cg_url, params=params, timeout=1.2)
+                res = requests.get(cg_url, params=params, **build_request_kwargs(4.5))
                 data = res.json()['bitcoin']
                 
                 price = float(data['usd'])
@@ -112,6 +140,8 @@ class CryptoService:
                     fallback = dict(cached)
                     fallback['stale'] = True
                     fallback['source'] = f"{fallback.get('source', 'Unknown')} (cached)"
+                    fallback['unavailable'] = fallback.get('price', 0) == 0
+                    fallback['updatedAt'] = fallback.get('updatedAt') or datetime.now().isoformat()
                     return fallback
                 return self._default_summary_snapshot()
         
@@ -130,7 +160,9 @@ class CryptoService:
             "fearGreed": fng_val,
             "fearGreedLabel": fng_label,
             "source": source,
+            "updatedAt": datetime.now().isoformat(),
             "stale": False,
+            "unavailable": False,
             "strategy": strategy
         }
         
@@ -145,7 +177,7 @@ class CryptoService:
             return cached['value'], cached['label']
 
         try:
-            fng_res = requests.get(f"{self.fng_api_url}", timeout=0.8)
+            fng_res = requests.get(f"{self.fng_api_url}", **build_request_kwargs(3.0))
             fng_data = fng_res.json()['data'][0]
             result = {
                 'value': int(fng_data['value']),
@@ -548,7 +580,7 @@ class CryptoService:
                 "vs_currency": "usd",
                 "days": "30"
             }
-            res = requests.get(cg_url, params=params)
+            res = requests.get(cg_url, params=params, **build_request_kwargs(4.5))
             data = res.json()
             
             # Convert to DataFrame
@@ -584,6 +616,9 @@ class CryptoService:
             return result
         except Exception as e:
             print(f"Error fetching K-lines: {e}")
+            cached = self._cache['klines']['data']
+            if cached:
+                return cached
             return None
     
     def get_derivatives_data(self):

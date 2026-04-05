@@ -1,5 +1,5 @@
 import { proxyBackendJson } from '@/app/api/_lib/backend';
 
 export async function GET() {
-  return proxyBackendJson('/api/commander/summary', 5000);
+  return proxyBackendJson('/api/commander/summary', 10000);
 }

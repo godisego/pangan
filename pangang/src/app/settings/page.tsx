@@ -1,9 +1,13 @@
 'use client';
 
 import Link from 'next/link';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import AppShell from '@/components/AppShell';
-import { loadUserSettings, saveUserSettings, type UserSettings } from '@/lib/localSettings';
+import ModuleShell from '@/components/ModuleShell';
+import { chatApi } from '@/lib/api';
+import { FALLBACK_AI_PROVIDERS, getProviderById } from '@/lib/aiProviders';
+import { defaultSettings, loadUserSettings, saveUserSettings, type UserSettings } from '@/lib/localSettings';
+import type { ChatProviderOption } from '@/types/api';
 import { API_CONFIG } from '@/utils/constants';
 
 type MessageState = { type: '' | 'success' | 'error' | 'info'; text: string };
@@ -21,41 +25,21 @@ type NotifyResponse = {
   results?: Record<string, NotifyChannelResult>;
 };
 
+function normalizeAiSettings(settings: UserSettings, providers: ChatProviderOption[]) {
+  const selectedProvider = getProviderById(settings.ai.provider, providers);
+
+  return {
+    ...settings,
+    ai: {
+      ...settings.ai,
+      provider: selectedProvider.id,
+      model: settings.ai.model?.trim() || selectedProvider.default_model,
+    },
+  };
+}
+
 const inputClassName =
-  'w-full rounded-[18px] border border-[var(--border-color)] bg-[rgba(255,255,255,0.02)] px-4 py-3 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-[var(--accent-cyan)] focus:outline-none';
-
-function Metric({
-  label,
-  value,
-  hint,
-}: {
-  label: string;
-  value: string;
-  hint: string;
-}) {
-  return (
-    <div className="data-tile">
-      <div className="text-[11px] uppercase tracking-[0.18em] text-[var(--text-muted)]">{label}</div>
-      <div className="mt-2 text-lg font-semibold text-[var(--text-primary)]">{value}</div>
-      <div className="mt-1 text-xs leading-6 text-[var(--text-secondary)]">{hint}</div>
-    </div>
-  );
-}
-
-function Panel({
-  title,
-  children,
-}: {
-  title: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <section className="surface-panel animate-stage p-5">
-      <div className="text-lg font-semibold text-[var(--text-primary)]">{title}</div>
-      <div className="mt-4">{children}</div>
-    </section>
-  );
-}
+  'input w-full';
 
 function Field({
   label,
@@ -67,7 +51,7 @@ function Field({
   children: React.ReactNode;
 }) {
   return (
-    <label className="block space-y-2">
+    <label className="grid gap-2">
       <div>
         <div className="text-sm font-medium text-[var(--text-primary)]">{label}</div>
         {hint ? <div className="mt-1 text-xs leading-6 text-[var(--text-secondary)]">{hint}</div> : null}
@@ -87,17 +71,88 @@ function ToggleRow({
   onChange: (checked: boolean) => void;
 }) {
   return (
-    <label className="flex items-center justify-between rounded-[18px] border border-[var(--border-color)] bg-[rgba(255,255,255,0.02)] px-4 py-3 text-sm text-[var(--text-primary)]">
-      <span>{label}</span>
-      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
-    </label>
+    <button
+      type="button"
+      onClick={() => onChange(!checked)}
+      className="flex w-full items-center justify-between gap-4 rounded-[18px] border border-[var(--border-color)] bg-[rgba(255,255,255,0.02)] px-4 py-3 text-left transition-all hover:border-[var(--border-strong)]"
+    >
+      <span className="text-sm font-medium text-[var(--text-primary)]">{label}</span>
+      <span className="toggle-shell">
+        <span className={`toggle-switch ${checked ? 'active' : ''}`} />
+      </span>
+    </button>
+  );
+}
+
+function StatusCard({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="module-node">
+      <div className="module-node__label">{label}</div>
+      <div className="module-node__title">{value}</div>
+    </div>
+  );
+}
+
+function StepCard({
+  step,
+  title,
+  detail,
+  status,
+}: {
+  step: string;
+  title: string;
+  detail: string;
+  status: 'done' | 'todo';
+}) {
+  return (
+    <div className={`rounded-[22px] border px-4 py-4 ${status === 'done' ? 'border-[rgba(105,231,176,0.26)] bg-[rgba(105,231,176,0.07)]' : 'border-[var(--border-color)] bg-[rgba(255,255,255,0.02)]'}`}>
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="text-[11px] uppercase tracking-[0.18em] text-[var(--text-muted)]">{step}</div>
+          <div className="mt-2 text-sm font-semibold text-[var(--text-primary)]">{title}</div>
+        </div>
+        <span className={`module-badge ${status === 'done' ? 'bg-[rgba(105,231,176,0.12)] text-[var(--accent-green)]' : ''}`}>
+          {status === 'done' ? '已完成' : '待完成'}
+        </span>
+      </div>
+      <div className="mt-3 text-sm leading-6 text-[var(--text-secondary)]">{detail}</div>
+    </div>
   );
 }
 
 export default function SettingsPage() {
-  const [settings, setSettings] = useState<UserSettings>(() => loadUserSettings());
+  const [settings, setSettings] = useState<UserSettings>(defaultSettings);
+  const [providerOptions, setProviderOptions] = useState<ChatProviderOption[]>(FALLBACK_AI_PROVIDERS);
+  const [savedSignature, setSavedSignature] = useState(JSON.stringify(defaultSettings));
   const [msg, setMsg] = useState<MessageState>({ type: '', text: '' });
-  const [pendingAction, setPendingAction] = useState<'' | 'save' | 'test' | 'daily'>('');
+  const [pendingAction, setPendingAction] = useState<'' | 'save' | 'test' | 'daily' | 'ai-test'>('');
+
+  useEffect(() => {
+    const loaded = loadUserSettings();
+    const normalized = normalizeAiSettings(loaded, FALLBACK_AI_PROVIDERS);
+    setSettings(normalized);
+    setSavedSignature(JSON.stringify(normalized));
+
+    void chatApi.getProviders()
+      .then((catalog) => {
+        if (!catalog.providers?.length) return;
+        setProviderOptions(catalog.providers);
+        setSettings((prev) => normalizeAiSettings(prev, catalog.providers));
+        setSavedSignature((prevSignature) => {
+          const parsed = JSON.parse(prevSignature) as UserSettings;
+          return JSON.stringify(normalizeAiSettings(parsed, catalog.providers));
+        });
+      })
+      .catch(() => {
+        // 保持本地兜底清单即可，避免设置页空白
+      });
+  }, []);
 
   const summarizeNotifyResult = (json: NotifyResponse, fallbackPrefix: string) => {
     const results = json?.results;
@@ -126,28 +181,57 @@ export default function SettingsPage() {
   };
 
   const updateSettings = (updater: (prev: UserSettings) => UserSettings) => {
-    setSettings((prev) => {
-      const next = updater(prev);
-      saveUserSettings(next);
-      return next;
-    });
+    setSettings((prev) => updater(prev));
   };
 
-  const status = useMemo(
-    () => ({
-      aiReady: Boolean(settings.ai.apiKey),
-      pushReady: Boolean(
-        settings.notifications.feishuWebhook ||
-          settings.notifications.wecomWebhook ||
-          (settings.notifications.telegramBotToken && settings.notifications.telegramChatId)
+  const status = useMemo(() => {
+    const channelCount = [
+      settings.notifications.feishuWebhook,
+      settings.notifications.wecomWebhook,
+      settings.notifications.telegramBotToken && settings.notifications.telegramChatId ? 'telegram' : '',
+    ].filter(Boolean).length;
+    const providerForStatus = getProviderById(settings.ai.provider, providerOptions);
+
+    return {
+      aiReady: Boolean(
+        settings.ai.apiKey.trim() &&
+          (providerForStatus.requires_base_url ? settings.ai.baseUrl.trim() : true)
       ),
-    }),
-    [settings]
-  );
+      pushReady: channelCount > 0,
+      channelCount,
+      scheduleText: settings.preferences.enablePush ? settings.preferences.pushTime : '关闭',
+      saveState: JSON.stringify(settings) === savedSignature ? '已同步' : '未保存',
+    };
+  }, [settings, savedSignature, providerOptions]);
+
+  const selectedProvider = getProviderById(settings.ai.provider, providerOptions);
+  const matchesKnownModel = selectedProvider.models.some((model) => model.id === settings.ai.model);
+  const stepSummary = [
+    {
+      step: 'Step 1',
+      title: '连接 AI',
+      detail: status.aiReady ? `${selectedProvider.label} · ${settings.ai.model}` : '选择提供商、模型并填写对应 API Key',
+      status: status.aiReady ? 'done' : 'todo',
+    },
+    {
+      step: 'Step 2',
+      title: '配置通知',
+      detail: status.pushReady ? `已配置 ${status.channelCount} 个通道` : '至少配置一个通知通道，后续早报和提醒才会发送',
+      status: status.pushReady ? 'done' : 'todo',
+    },
+    {
+      step: 'Step 3',
+      title: '保存并测试',
+      detail: status.saveState === '已同步' ? '当前配置已经同步到本地与后端' : '最后一步是保存配置，并测试 AI / 通知是否真的可用',
+      status: status.saveState === '已同步' ? 'done' : 'todo',
+    },
+  ] as const;
 
   const handleSave = async () => {
     setPendingAction('save');
     saveUserSettings(settings);
+    setSavedSignature(JSON.stringify(settings));
+
     try {
       const res = await fetch(`${API_CONFIG.BASE_URL}/api/notify/config`, {
         method: 'POST',
@@ -170,12 +254,39 @@ export default function SettingsPage() {
       });
       const json = await res.json();
       if (json.status === 'success') {
-        setMsg({ type: 'success', text: '配置已保存，并同步到了后端通知中心。' });
+        setMsg({ type: 'success', text: '配置已保存并同步。' });
       } else {
         setMsg({ type: 'error', text: `本地已保存，但后端同步失败：${JSON.stringify(json)}` });
       }
     } catch {
       setMsg({ type: 'error', text: '本地已保存，但同步到后端失败，请检查服务状态。' });
+    } finally {
+      setPendingAction('');
+    }
+  };
+
+  const handleAiTest = async () => {
+    if (!settings.ai.apiKey.trim()) {
+      setMsg({ type: 'error', text: '请先填写当前提供商对应的 API Key。' });
+      return;
+    }
+
+    try {
+      setPendingAction('ai-test');
+      setMsg({ type: 'info', text: '正在验证 AI 配置...' });
+      const result = await chatApi.testConfig({
+        provider: settings.ai.provider,
+        api_key: settings.ai.apiKey,
+        model: settings.ai.model,
+        base_url: selectedProvider.requires_base_url ? settings.ai.baseUrl || undefined : undefined,
+      });
+      setMsg({
+        type: 'success',
+        text: `AI 已连通：${getProviderById(result.provider, providerOptions)?.label || result.provider} · ${result.model}`,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'AI 配置验证失败';
+      setMsg({ type: 'error', text: `AI 配置验证失败：${message}` });
     } finally {
       setPendingAction('');
     }
@@ -194,7 +305,7 @@ export default function SettingsPage() {
 
     try {
       setPendingAction('test');
-      setMsg({ type: 'info', text: '正在测试所有已配置通知通道...' });
+      setMsg({ type: 'info', text: '正在测试所有已配置通道...' });
       const res = await fetch(`${API_CONFIG.BASE_URL}/api/notify/test`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -267,32 +378,51 @@ export default function SettingsPage() {
 
   return (
     <AppShell
-      title="配置中心"
-      subtitle="这里直接管理三件事：AI、通知、偏好。"
-      badge="控制台"
+      title="设置"
+      subtitle="按模块配置即可。"
+      badge="Settings"
       maxWidthClassName="max-w-6xl"
       actions={(
         <div className="flex flex-wrap gap-2">
           <Link href="/chat" className="btn btn-secondary px-4 py-2 text-sm">
-            AI 助手
+            去对话
           </Link>
           <Link href="/commander" className="btn btn-secondary px-4 py-2 text-sm">
-            作战室
+            去作战
           </Link>
         </div>
       )}
     >
-      <section className="surface-panel animate-stage p-5">
-        <div className="grid gap-3 md:grid-cols-4">
-          <Metric label="AI" value={status.aiReady ? '已配置' : '未配置'} hint={`${settings.ai.provider} / ${settings.ai.model}`} />
-          <Metric label="通知" value={status.pushReady ? '可发送' : '未配置'} hint="飞书 / 企微 / Telegram" />
-          <Metric label="定时" value={settings.preferences.enablePush ? settings.preferences.pushTime : '关闭'} hint="后端常驻时生效" />
-          <Metric label="存储" value="本地 + 后端" hint="AI 保留本地，通知同步后端" />
+      <ModuleShell
+        code="01"
+        eyebrow="Setup Flow"
+        title="按 3 步完成配置"
+        badge={status.saveState}
+        variant="settings"
+        motion="pulse"
+      >
+        <div className="module-kpi-grid">
+          <StatusCard label="AI" value={status.aiReady ? '已配置' : '未配置'} />
+          <StatusCard label="通知" value={status.pushReady ? `${status.channelCount} 个通道` : '未配置'} />
+          <StatusCard label="定时" value={status.scheduleText} />
+          <StatusCard label="状态" value={status.saveState} />
+        </div>
+
+        <div className="grid gap-3 lg:grid-cols-3">
+          {stepSummary.map((step) => (
+            <StepCard
+              key={step.step}
+              step={step.step}
+              title={step.title}
+              detail={step.detail}
+              status={step.status}
+            />
+          ))}
         </div>
 
         {msg.text ? (
           <div
-            className={`mt-4 rounded-[18px] px-4 py-3 text-sm ${
+            className={`rounded-[18px] px-4 py-3 text-sm ${
               msg.type === 'success'
                 ? 'bg-[var(--accent-green-dim)] text-[var(--accent-green)]'
                 : msg.type === 'info'
@@ -303,93 +433,179 @@ export default function SettingsPage() {
             {msg.text}
           </div>
         ) : null}
-      </section>
+      </ModuleShell>
 
-      <div className="grid gap-5 xl:grid-cols-2">
-        <Panel title="AI 配置">
+      <div className="grid gap-6">
+        <ModuleShell
+          code="02"
+          eyebrow="Step 1"
+          title="先连接 AI"
+          badge={status.aiReady ? '已配置' : '未配置'}
+          variant="settings"
+          motion="drift"
+        >
+          <div className="rounded-[18px] border border-[var(--border-color)] bg-[rgba(255,255,255,0.02)] px-4 py-3 text-sm text-[var(--text-secondary)]">
+            只需要做三件事：选择提供商、选择模型、填写 API Key。只有自定义兼容接口时，才需要额外填写 Base URL。
+          </div>
+
           <div className="grid gap-4 md:grid-cols-2">
             <Field label="模型提供商">
               <select
                 className={inputClassName}
                 value={settings.ai.provider}
                 onChange={(e) =>
-                  updateSettings((prev) => ({
-                    ...prev,
-                    ai: { ...prev.ai, provider: e.target.value },
-                  }))
+                  updateSettings((prev) => {
+                    const nextProvider = getProviderById(e.target.value, providerOptions);
+                    return {
+                      ...prev,
+                      ai: {
+                        ...prev.ai,
+                        provider: nextProvider.id,
+                        model: nextProvider.default_model,
+                        baseUrl: nextProvider.requires_base_url ? prev.ai.baseUrl : '',
+                      },
+                    };
+                  })
                 }
               >
-                <option value="zhipu">智谱</option>
-                <option value="openai">OpenAI 兼容</option>
-                <option value="gemini">Gemini</option>
-                <option value="custom">自定义兼容接口</option>
+                {providerOptions.map((provider) => (
+                  <option key={provider.id} value={provider.id}>
+                    {provider.label}
+                  </option>
+                ))}
               </select>
             </Field>
 
-            <Field label="模型名称" hint="推荐 `glm-4.7-flash`">
+            <Field label="模型名称">
+              <div className="grid gap-3">
+                <select
+                  className={inputClassName}
+                  value={matchesKnownModel ? settings.ai.model : '__custom__'}
+                  onChange={(e) =>
+                    updateSettings((prev) => ({
+                      ...prev,
+                      ai: {
+                        ...prev.ai,
+                        model: e.target.value === '__custom__' ? prev.ai.model : e.target.value,
+                      },
+                    }))
+                  }
+                >
+                  {selectedProvider.models.map((model) => (
+                    <option key={model.id} value={model.id}>
+                      {model.label}
+                    </option>
+                  ))}
+                  <option value="__custom__">自定义模型名</option>
+                </select>
+
+                {!matchesKnownModel ? (
+                  <input
+                    type="text"
+                    className={inputClassName}
+                    placeholder="例如 glm-4.6v"
+                    value={settings.ai.model}
+                    onChange={(e) =>
+                      updateSettings((prev) => ({
+                        ...prev,
+                        ai: { ...prev.ai, model: e.target.value },
+                      }))
+                    }
+                  />
+                ) : null}
+              </div>
+            </Field>
+          </div>
+
+          <Field
+            label={selectedProvider.api_key_label}
+            hint={selectedProvider.description}
+          >
+            <input
+              type="password"
+              className={inputClassName}
+              placeholder={selectedProvider.api_key_placeholder}
+              value={settings.ai.apiKey}
+              onChange={(e) =>
+                updateSettings((prev) => ({
+                  ...prev,
+                  ai: { ...prev.ai, apiKey: e.target.value },
+                }))
+              }
+            />
+          </Field>
+
+          {selectedProvider.requires_base_url ? (
+            <Field label="Base URL" hint="只在自定义兼容接口时需要填写。">
               <input
                 type="text"
                 className={inputClassName}
-                value={settings.ai.model}
+                placeholder={selectedProvider.base_url_placeholder || 'https://your-endpoint.example/v1'}
+                value={settings.ai.baseUrl}
                 onChange={(e) =>
                   updateSettings((prev) => ({
                     ...prev,
-                    ai: { ...prev.ai, model: e.target.value },
+                    ai: { ...prev.ai, baseUrl: e.target.value },
                   }))
                 }
               />
             </Field>
+          ) : null}
+
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-[18px] border border-[var(--border-color)] bg-[rgba(255,255,255,0.02)] px-4 py-3">
+            <div className="text-sm text-[var(--text-secondary)]">
+              当前选择：{selectedProvider.label} · {settings.ai.model || selectedProvider.default_model}
+            </div>
+            <button onClick={() => void handleAiTest()} className="btn btn-secondary px-4 py-2 text-sm">
+              {pendingAction === 'ai-test' ? '验证中...' : '测试 AI 配置'}
+            </button>
+          </div>
+        </ModuleShell>
+
+        <ModuleShell
+          code="03"
+          eyebrow="Step 2"
+          title="再配置通知"
+          badge={status.pushReady ? `${status.channelCount} 个通道` : '未配置'}
+          variant="settings"
+          motion="scan"
+        >
+          <div className="rounded-[18px] border border-[var(--border-color)] bg-[rgba(255,255,255,0.02)] px-4 py-3 text-sm text-[var(--text-secondary)]">
+            飞书、企微、Telegram 三选一即可。Telegram 需要 `Bot Token + 数字 Chat ID`，不是机器人用户名。
           </div>
 
-          <div className="mt-4">
-            <Field label="API Key">
-              <input
-                type="password"
-                className={inputClassName}
-                placeholder="sk-..."
-                value={settings.ai.apiKey}
-                onChange={(e) =>
-                  updateSettings((prev) => ({
-                    ...prev,
-                    ai: { ...prev.ai, apiKey: e.target.value },
-                  }))
-                }
-              />
-            </Field>
-          </div>
-        </Panel>
-
-        <Panel title="通知通道">
           <div className="grid gap-4">
-            <Field label="飞书 Webhook">
-              <input
-                type="text"
-                className={inputClassName}
-                placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/xxxxxx"
-                value={settings.notifications.feishuWebhook}
-                onChange={(e) =>
-                  updateSettings((prev) => ({
-                    ...prev,
-                    notifications: { ...prev.notifications, feishuWebhook: e.target.value },
-                  }))
-                }
-              />
-            </Field>
+            <div className="grid gap-4 md:grid-cols-2">
+              <Field label="飞书 Webhook">
+                <input
+                  type="text"
+                  className={inputClassName}
+                  placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/xxxxxxxx"
+                  value={settings.notifications.feishuWebhook}
+                  onChange={(e) =>
+                    updateSettings((prev) => ({
+                      ...prev,
+                      notifications: { ...prev.notifications, feishuWebhook: e.target.value },
+                    }))
+                  }
+                />
+              </Field>
 
-            <Field label="企微 Webhook">
-              <input
-                type="text"
-                className={inputClassName}
-                placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxxxxx"
-                value={settings.notifications.wecomWebhook}
-                onChange={(e) =>
-                  updateSettings((prev) => ({
-                    ...prev,
-                    notifications: { ...prev.notifications, wecomWebhook: e.target.value },
-                  }))
-                }
-              />
-            </Field>
+              <Field label="企微 Webhook">
+                <input
+                  type="text"
+                  className={inputClassName}
+                  placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxxxxxxx"
+                  value={settings.notifications.wecomWebhook}
+                  onChange={(e) =>
+                    updateSettings((prev) => ({
+                      ...prev,
+                      notifications: { ...prev.notifications, wecomWebhook: e.target.value },
+                    }))
+                  }
+                />
+              </Field>
+            </div>
 
             <div className="grid gap-4 md:grid-cols-2">
               <Field label="Telegram Bot Token">
@@ -407,7 +623,7 @@ export default function SettingsPage() {
                 />
               </Field>
 
-              <Field label="Telegram Chat ID" hint="必须填数字 ID">
+              <Field label="Telegram Chat ID" hint="填数字，不是机器人用户名。">
                 <input
                   type="text"
                   className={inputClassName}
@@ -439,7 +655,7 @@ export default function SettingsPage() {
                 />
               </Field>
 
-              <Field label="Telegram Proxy URL" hint="例如 socks5h://127.0.0.1:7892">
+              <Field label="Telegram Proxy URL">
                 <input
                   type="text"
                   className={inputClassName}
@@ -454,97 +670,111 @@ export default function SettingsPage() {
                 />
               </Field>
             </div>
-          </div>
-        </Panel>
 
-        <Panel title="本地偏好">
-          <div className="grid gap-3">
-            <ToggleRow
-              label="启用 A 股视图"
-              checked={settings.preferences.enableAStock}
-              onChange={(checked) =>
-                updateSettings((prev) => ({
-                  ...prev,
-                  preferences: { ...prev.preferences, enableAStock: checked },
-                }))
-              }
-            />
-            <ToggleRow
-              label="启用 BTC 视图"
-              checked={settings.preferences.enableBtc}
-              onChange={(checked) =>
-                updateSettings((prev) => ({
-                  ...prev,
-                  preferences: { ...prev.preferences, enableBtc: checked },
-                }))
-              }
-            />
-            <ToggleRow
-              label="启用每日定时推送"
-              checked={settings.preferences.enablePush}
-              onChange={(checked) =>
-                updateSettings((prev) => ({
-                  ...prev,
-                  preferences: { ...prev.preferences, enablePush: checked },
-                }))
-              }
-            />
+            <div className="module-node">
+              <div className="module-node__label">Telegram 提示</div>
+              <div className="module-node__copy">
+                先给机器人发 `/start`，再找 `@userinfobot` 或 `@RawDataBot` 获取数字 Chat ID。
+              </div>
+            </div>
           </div>
+        </ModuleShell>
 
-          <div className="mt-4 grid gap-4 md:grid-cols-2">
-            <Field label="推送时间">
-              <input
-                type="time"
-                className={inputClassName}
-                value={settings.preferences.pushTime}
-                onChange={(e) =>
+        <ModuleShell
+          code="04"
+          eyebrow="Step 3"
+          title="最后保存并测试"
+          badge={pendingAction ? '处理中' : status.saveState}
+          variant="settings"
+          motion="track"
+        >
+          <div className="grid gap-6 xl:grid-cols-[1fr_0.86fr]">
+            <div className="grid gap-3">
+              <ToggleRow
+                label="启用 A 股视图"
+                checked={settings.preferences.enableAStock}
+                onChange={(checked) =>
                   updateSettings((prev) => ({
                     ...prev,
-                    preferences: { ...prev.preferences, pushTime: e.target.value },
+                    preferences: { ...prev.preferences, enableAStock: checked },
                   }))
                 }
               />
-            </Field>
-
-            <Field label="风险偏好">
-              <select
-                className={inputClassName}
-                value={settings.preferences.riskPreference}
-                onChange={(e) =>
+              <ToggleRow
+                label="启用 BTC 视图"
+                checked={settings.preferences.enableBtc}
+                onChange={(checked) =>
                   updateSettings((prev) => ({
                     ...prev,
-                    preferences: { ...prev.preferences, riskPreference: e.target.value as UserSettings['preferences']['riskPreference'] },
+                    preferences: { ...prev.preferences, enableBtc: checked },
                   }))
                 }
-              >
-                <option value="conservative">保守</option>
-                <option value="balanced">平衡</option>
-                <option value="aggressive">激进</option>
-              </select>
-            </Field>
-          </div>
-        </Panel>
+              />
+              <ToggleRow
+                label="启用每日定时推送"
+                checked={settings.preferences.enablePush}
+                onChange={(checked) =>
+                  updateSettings((prev) => ({
+                    ...prev,
+                    preferences: { ...prev.preferences, enablePush: checked },
+                  }))
+                }
+              />
 
-        <Panel title="操作">
-          <div className="grid gap-3">
-            <button onClick={() => void handleSave()} className="btn btn-primary px-5 py-4 text-base">
-              {pendingAction === 'save' ? '正在保存...' : '保存并同步配置'}
-            </button>
-            <button onClick={() => void handleTest()} className="btn btn-secondary px-5 py-4 text-base">
-              {pendingAction === 'test' ? '正在测试...' : '测试所有已配置通道'}
-            </button>
-            <button onClick={() => void handleDailyTest()} className="btn btn-secondary px-5 py-4 text-base">
-              {pendingAction === 'daily' ? '正在发送早报...' : '手动触发今日早报'}
-            </button>
-          </div>
+              <div className="grid gap-4 md:grid-cols-2">
+                <Field label="推送时间">
+                  <input
+                    type="time"
+                    className={inputClassName}
+                    value={settings.preferences.pushTime}
+                    onChange={(e) =>
+                      updateSettings((prev) => ({
+                        ...prev,
+                        preferences: { ...prev.preferences, pushTime: e.target.value },
+                      }))
+                    }
+                  />
+                </Field>
 
-          <div className="mt-4 data-tile">
-            <div className="text-[11px] uppercase tracking-[0.18em] text-[var(--text-muted)]">Telegram 提示</div>
-            <div className="mt-2 text-sm leading-7 text-[var(--text-secondary)]">
-              Chat ID 必须是纯数字，不是 `@example_bot` 这种用户名。可以先给机器人发 `/start`，再用 `@userinfobot` 或 `@RawDataBot` 查数字 ID。
+                <Field label="风险偏好">
+                  <select
+                    className={inputClassName}
+                    value={settings.preferences.riskProfile}
+                    onChange={(e) =>
+                      updateSettings((prev) => ({
+                        ...prev,
+                        preferences: {
+                          ...prev.preferences,
+                          riskProfile: e.target.value as UserSettings['preferences']['riskProfile'],
+                        },
+                      }))
+                    }
+                  >
+                    <option value="conservative">保守</option>
+                    <option value="balanced">平衡</option>
+                    <option value="aggressive">激进</option>
+                  </select>
+                </Field>
+              </div>
+            </div>
+
+            <div className="grid gap-3">
+              <button onClick={() => void handleSave()} className="btn btn-primary px-5 py-4 text-base">
+                {pendingAction === 'save' ? '正在保存...' : '保存并同步配置'}
+              </button>
+              <button onClick={() => void handleTest()} className="btn btn-secondary px-5 py-4 text-base">
+                {pendingAction === 'test' ? '正在测试...' : '测试所有通道'}
+              </button>
+              <button onClick={() => void handleDailyTest()} className="btn btn-secondary px-5 py-4 text-base">
+                {pendingAction === 'daily' ? '正在发送...' : '手动触发今日早报'}
+              </button>
+
+              <div className="rounded-[18px] border border-[var(--border-color)] bg-[rgba(255,255,255,0.02)] px-4 py-3 text-sm leading-6 text-[var(--text-secondary)]">
+                保存后会同时写入本地与后端通知配置。测试按钮会直接验证当前通道，早报按钮会立即生成一条完整日报。
+              </div>
             </div>
           </div>
-        </Panel>
+        </ModuleShell>
       </div>
     </AppShell>
   );

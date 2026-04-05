@@ -25,6 +25,9 @@ class ETFAndOvernightFetcher:
         返回：主力抢筹/出逃的 ETF 板块
         """
         try:
+            if not hasattr(ak, "etf_fund_flow_em"):
+                logger.info("Skip ETF fund flow fetch: current akshare build has no etf_fund_flow_em")
+                return []
             # 获取 ETF 当日资金流向
             df = ak.etf_fund_flow_em()
 

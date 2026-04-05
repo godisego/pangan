@@ -1,7 +1,7 @@
 import os
 from typing import Dict, List, Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
 from app.services.battle_commander import battle_commander
@@ -10,6 +10,14 @@ from app.services.stock_service import stock_service
 
 
 router = APIRouter()
+
+
+def verify_trigger_secret(trigger_secret: Optional[str]) -> None:
+    expected_secret = (os.getenv("DAILY_REPORT_TRIGGER_SECRET") or "").strip()
+    if not expected_secret:
+        return
+    if trigger_secret != expected_secret:
+        raise HTTPException(status_code=401, detail="Invalid trigger secret")
 
 
 class ChannelConfig(BaseModel):
@@ -238,7 +246,11 @@ async def send_daily_report_now(
 
 
 @router.post("/daily_report")
-async def trigger_daily_report(req: Optional[DailyReportRequest] = None):
+async def trigger_daily_report(
+    req: Optional[DailyReportRequest] = None,
+    x_trigger_secret: Optional[str] = Header(default=None),
+):
+    verify_trigger_secret(x_trigger_secret)
     overrides = None
     if req and req.config:
         overrides = req.config.model_dump() if hasattr(req.config, "model_dump") else req.config.dict()

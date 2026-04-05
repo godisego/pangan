@@ -1,3 +1,5 @@
+import { FALLBACK_AI_PROVIDERS, getProviderById } from '@/lib/aiProviders';
+
 export interface UserSettings {
   notifications: {
     feishuWebhook: string;
@@ -11,6 +13,7 @@ export interface UserSettings {
     provider: string;
     apiKey: string;
     model: string;
+    baseUrl: string;
   };
   preferences: {
     enableAStock: boolean;
@@ -35,7 +38,8 @@ export const defaultSettings: UserSettings = {
   ai: {
     provider: 'zhipu',
     apiKey: '',
-    model: 'glm-4.7-flash'
+    model: 'glm-4.7-flash',
+    baseUrl: ''
   },
   preferences: {
     enableAStock: true,
@@ -58,7 +62,7 @@ export function loadUserSettings(): UserSettings {
     }
 
     const parsed = JSON.parse(raw) as Partial<UserSettings>;
-    return {
+    const merged = {
       notifications: {
         ...defaultSettings.notifications,
         ...parsed.notifications
@@ -71,6 +75,16 @@ export function loadUserSettings(): UserSettings {
         ...defaultSettings.preferences,
         ...parsed.preferences
       }
+    };
+
+    const selectedProvider = getProviderById(merged.ai.provider, FALLBACK_AI_PROVIDERS);
+    return {
+      ...merged,
+      ai: {
+        ...merged.ai,
+        provider: selectedProvider.id,
+        model: merged.ai.model?.trim() || selectedProvider.default_model,
+      },
     };
   } catch {
     return defaultSettings;

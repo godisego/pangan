@@ -1,68 +1,106 @@
 'use client';
 
 import Link from 'next/link';
+import ModuleShell from '@/components/ModuleShell';
 import { useFetch } from '@/hooks/useFetch';
 import { commanderApi } from '@/lib/api';
 import type { CommanderStock, CommanderSummary } from '@/types/api';
 
-function MiniMetric({
+function tradeStateClass(state?: string) {
+  if (state === '真启动') return 'text-[var(--accent-green)]';
+  if (state === '拉高出货') return 'text-[var(--accent-red)]';
+  return 'text-[var(--accent-gold)]';
+}
+
+function BriefMetric({
   label,
   value,
-  hint,
+  detail,
 }: {
   label: string;
   value: string;
-  hint: string;
+  detail: string;
 }) {
   return (
-    <div className="data-tile">
-      <div className="text-[11px] uppercase tracking-[0.18em] text-[var(--text-muted)]">{label}</div>
-      <div className="mt-2 text-lg font-semibold tracking-[-0.03em] text-[var(--text-primary)]">{value}</div>
-      <div className="mt-1 text-xs leading-6 text-[var(--text-secondary)]">{hint}</div>
+    <div className="module-node">
+      <div className="module-node__label">{label}</div>
+      <div className="module-node__title">{value}</div>
+      <div className="module-node__copy">{detail}</div>
     </div>
   );
 }
 
+function formatSnapshotStatus(summary?: CommanderSummary) {
+  const meta = summary?.snapshot_meta;
+  if (!meta) return null;
+  if (meta.state === 'fresh') return '实时摘要';
+  if (meta.state === 'stale') return '缓存摘要';
+  if (meta.state === 'boot') return '启动快照';
+  return '摘要快照';
+}
+
 function StockLane({
   title,
+  accent,
   stocks,
-  tone,
 }: {
   title: string;
+  accent: 'attack' | 'defense';
   stocks: CommanderStock[];
-  tone: 'attack' | 'defense';
 }) {
-  const accentClass = tone === 'attack' ? 'text-[var(--accent-green)]' : 'text-[var(--accent-gold)]';
-  const badgeClass = tone === 'attack' ? 'bg-[var(--accent-green-dim)] text-[var(--accent-green)]' : 'bg-[var(--accent-gold-dim)] text-[var(--accent-gold)]';
+  const accentClass = accent === 'attack' ? 'text-[var(--accent-green)]' : 'text-[var(--accent-gold)]';
 
   return (
-    <div className="rounded-[24px] border border-[var(--border-color)] bg-[rgba(255,255,255,0.02)] p-4">
-      <div className="flex items-center justify-between gap-3">
-        <div className="text-sm font-semibold text-[var(--text-primary)]">{title}</div>
-        <div className={`rounded-full px-2.5 py-1 text-xs font-medium ${badgeClass}`}>{tone === 'attack' ? '进攻' : '防守'}</div>
+    <div className="module-node">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="module-node__label">{accent === 'attack' ? 'Attack Lane' : 'Defense Lane'}</div>
+          <div className="module-node__title">{title}</div>
+        </div>
+        <div className={`text-xs font-semibold uppercase tracking-[0.16em] ${accentClass}`}>
+          {accent === 'attack' ? '进攻' : '防守'}
+        </div>
       </div>
 
-      <div className="mt-4 space-y-3">
+      <div className="mt-4 scan-list">
         {stocks.length ? (
           stocks.map((stock) => (
-            <div key={`${title}-${stock.code}`} className="rounded-[18px] border border-[var(--border-color)] bg-[rgba(8,20,30,0.76)] px-4 py-3">
-              <div className="flex items-center justify-between gap-3">
+            <div key={`${title}-${stock.code}`} className="rounded-[18px] border border-[var(--border-color)] bg-[rgba(255,255,255,0.03)] px-4 py-4">
+              <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <div className="truncate text-sm font-semibold text-[var(--text-primary)]">
+                  <strong className="block text-sm leading-7 text-[var(--text-primary)]">
                     <span className={`mr-2 ${accentClass}`}>{stock.priority}</span>
                     {stock.stock}
+                  </strong>
+                  <div className="mt-1 text-xs leading-6 text-[var(--text-secondary)]">
+                    {stock.auction_status} · {stock.tactic}
                   </div>
-                  <div className="mt-1 text-xs text-[var(--text-muted)]">{stock.code}</div>
                 </div>
-                <div className={`shrink-0 text-xs font-medium ${accentClass}`}>{stock.auction_price}</div>
+                <div className={`shrink-0 text-right ${accentClass}`}>
+                  <div className="text-sm font-semibold">{stock.auction_price}</div>
+                  {stock.actionability ? (
+                    <div className="mt-1 text-[11px] tracking-[0.12em] text-[var(--text-muted)]">{stock.actionability}</div>
+                  ) : null}
+                </div>
               </div>
-              <div className="mt-2 line-clamp-1 text-xs text-[var(--text-secondary)]">{stock.auction_status}</div>
-              <div className="mt-2 line-clamp-2 text-sm leading-6 text-[var(--text-secondary)]">{stock.tactic}</div>
+              {stock.execution_note || stock.risk_note ? (
+                <div className="mt-3 grid gap-2">
+                  {stock.execution_note ? (
+                    <div className="text-sm leading-7 text-[var(--text-secondary)]">{stock.execution_note}</div>
+                  ) : null}
+                  {stock.risk_note ? (
+                    <div className="text-xs leading-6 text-[var(--accent-red)]">{stock.risk_note}</div>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
           ))
         ) : (
-          <div className="rounded-[18px] border border-dashed border-[var(--border-color)] px-4 py-3 text-sm text-[var(--text-secondary)]">
-            暂无推荐股票
+          <div className="scan-row">
+            <div className="scan-row-copy">
+              <strong>暂无推荐</strong>
+              <span>当前没有足够可靠的候选。</span>
+            </div>
           </div>
         )}
       </div>
@@ -73,27 +111,44 @@ function StockLane({
 export default function CommanderOverview() {
   const { data, loading, error, isRefreshing, refetch } = useFetch<CommanderSummary>(
     () => commanderApi.getSummary(),
-    { interval: 60000, cacheKey: 'pangang_cache_commander_summary_v1' }
+    { interval: 60000, cacheKey: 'pangang_cache_commander_summary_v4' }
   );
 
   if (loading) {
     return (
-      <section className="surface-panel animate-stage">
-        <div className="flex min-h-[180px] items-center justify-center text-sm text-[var(--text-secondary)]">
-          正在生成今日结论...
+      <ModuleShell
+        code="01"
+        eyebrow="Today Briefing"
+        title="正在整理今日结论"
+        badge="Briefing"
+        variant="briefing"
+        motion="pulse"
+      >
+        <div className="module-node">
+          <div className="module-node__label">Status</div>
+          <div className="module-node__title">正在生成今日结论...</div>
+          <div className="module-node__copy">当前会优先读取快照，再在后台刷新主线与股票池。</div>
         </div>
-      </section>
+      </ModuleShell>
     );
   }
 
   if (!data) {
     return (
-      <section className="surface-panel animate-stage border-[rgba(255,123,136,0.24)] p-5">
-        <div className="text-sm font-semibold text-[var(--text-primary)]">总控台暂时不可用</div>
-        <div className="mt-2 text-sm leading-7 text-[var(--text-secondary)]">
-          {error ? `摘要加载失败：${error.message}` : '当前还没有拿到今日摘要。'}
+      <ModuleShell
+        code="01"
+        eyebrow="Today Briefing"
+        title="今日总控台暂时不可用"
+        badge="Fallback"
+        variant="briefing"
+        motion="pulse"
+      >
+        <div className="module-node">
+          <div className="module-node__label">Error</div>
+          <div className="module-node__title">摘要加载失败</div>
+          <div className="module-node__copy">{error ? error.message : '当前还没有拿到今日摘要。'}</div>
         </div>
-      </section>
+      </ModuleShell>
     );
   }
 
@@ -103,110 +158,180 @@ export default function CommanderOverview() {
   const defenseStocks = data.recommended_stocks?.defense || [];
 
   return (
-    <section className="surface-panel animate-stage overflow-hidden p-5">
-      <div className="grid gap-5 xl:grid-cols-[1.1fr_0.9fr]">
-        <div className="space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="section-kicker">Today Briefing</span>
-              <span className="metric-chip"><strong>{data.weather.icon} {data.weather.weather}</strong></span>
-              <span className="metric-chip"><strong>{data.phase_label || '盘中阶段'}</strong></span>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2">
-              {isRefreshing ? <span className="metric-chip">更新中</span> : null}
-              <button onClick={() => void refetch()} className="btn btn-secondary px-4 py-2 text-xs">
-                刷新
-              </button>
-            </div>
+    <ModuleShell
+      code="01"
+      eyebrow="Today Briefing"
+      title="先看结论，再决定是否继续深读"
+      badge={`${data.weather.icon} ${data.weather.weather}`}
+      variant="briefing"
+      motion="pulse"
+      actions={(
+        <>
+          <Link href="/commander" className="btn btn-primary px-4 py-2 text-sm">
+            去作战
+          </Link>
+          <Link href="/review" className="btn btn-secondary px-4 py-2 text-sm">
+            去复盘
+          </Link>
+          <button type="button" onClick={() => void refetch()} className="btn btn-secondary px-4 py-2 text-sm">
+            {isRefreshing ? '刷新中...' : '刷新结论'}
+          </button>
+        </>
+      )}
+    >
+      <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
+        <div className="module-node">
+          <div className="module-node__label">Main Takeaway</div>
+          <div className="mt-3 text-3xl font-semibold tracking-[-0.05em] text-[var(--text-primary)]">
+            进攻看 <span className="text-[var(--accent-green)]">{attackName}</span>
+            <br className="hidden sm:block" />
+            <span className="sm:hidden">，</span>
+            防守看 <span className="text-[var(--accent-gold)]">{defenseName}</span>
           </div>
-
-          <div className="rounded-[28px] border border-[rgba(141,220,255,0.18)] bg-[linear-gradient(135deg,rgba(141,220,255,0.1),rgba(246,199,125,0.06))] p-5">
-            <div className="text-[11px] uppercase tracking-[0.2em] text-[var(--text-muted)]">今日结论</div>
-            <div className="mt-3 text-3xl font-semibold tracking-[-0.05em] text-[var(--text-primary)]">
-              进攻看 <span className="text-[var(--accent-green)]">{attackName}</span>
-              ，防守看 <span className="text-[var(--accent-gold)]">{defenseName}</span>
-            </div>
-            <div className="mt-3 text-base leading-8 text-[var(--text-secondary)]">
-              {data.action_now || data.focus || data.mainlines.summary}
-            </div>
-            <div className="mt-4 flex flex-wrap gap-2">
-              <span className="metric-chip"><strong>{data.position_text}</strong></span>
-              <span className="metric-chip"><strong>{data.review?.status || '暂无昨日记录'}</strong></span>
-            </div>
+          <div className="mt-4 text-sm leading-7 text-[var(--text-secondary)]">
+            {data.action_now || data.focus || data.mainlines.summary}
           </div>
-
-          <div className="grid gap-3 md:grid-cols-3">
-            <MiniMetric
-              label="市场"
-              value={`${data.weather.icon} ${data.weather.weather}`}
-              hint={data.weather.auction_sentiment || data.weather.description}
-            />
-            <MiniMetric
-              label="动作"
-              value={data.phase_label || '盘中阶段'}
-              hint={data.action_now || '按主线强弱执行，不做无计划切换。'}
-            />
-            <MiniMetric
-              label="仓位"
-              value={data.position_text}
-              hint={`进攻 ${data.position.attack}% / 防守 ${data.position.defense}% / 现金 ${data.position.cash}%`}
-            />
-          </div>
-
-          <div className="grid gap-3 md:grid-cols-3">
-            <div className="control-strip md:col-span-3">
-              <div className="control-strip-label">操作入口</div>
-              <div className="control-strip-grid">
-                <Link href="/commander" className="action-card compact">
-                  <div className="action-label">立即执行</div>
-                  <div className="mt-3 text-base font-semibold text-[var(--text-primary)]">去作战室</div>
-                  <div className="mt-1 text-sm leading-6 text-[var(--text-secondary)]">查看时间窗军令、双主线和完整股票池。</div>
-                </Link>
-                <Link href="/review" className="action-card compact">
-                  <div className="action-label">验证结果</div>
-                  <div className="mt-3 text-base font-semibold text-[var(--text-primary)]">去复盘室</div>
-                  <div className="mt-1 text-sm leading-6 text-[var(--text-secondary)]">回看昨日逻辑，确认哪些判断已经兑现。</div>
-                </Link>
-                <Link href="/settings" className="action-card compact">
-                  <div className="action-label">配置中心</div>
-                  <div className="mt-3 text-base font-semibold text-[var(--text-primary)]">去设置</div>
-                  <div className="mt-1 text-sm leading-6 text-[var(--text-secondary)]">管理 AI、通知通道和推送偏好。</div>
-                </Link>
+          {data.snapshot_meta ? (
+            <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-[var(--text-secondary)]">
+              <span className="rounded-full border border-white/10 px-2.5 py-1 text-[11px] tracking-[0.12em] text-[var(--text-muted)]">
+                {formatSnapshotStatus(data)}
+              </span>
+              {data.snapshot_meta.updated_at ? (
+                <span>更新于 {data.snapshot_meta.updated_at.replace('T', ' ').slice(0, 19)}</span>
+              ) : null}
+              {typeof data.snapshot_meta.age_seconds === 'number' ? (
+                <span>· 延迟 {data.snapshot_meta.age_seconds}s</span>
+              ) : null}
+              {data.snapshot_meta.refreshing ? <span>· 后台刷新中</span> : null}
+            </div>
+          ) : null}
+          {data.factor_engine || data.trade_filter ? (
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              {data.factor_engine ? (
+                <div className="rounded-[18px] border border-[var(--border-color)] bg-[rgba(255,255,255,0.03)] px-4 py-3">
+                  <div className="text-[11px] uppercase tracking-[0.18em] text-[var(--text-muted)]">四阶段判断</div>
+                  <div className="mt-2 text-xl font-semibold text-[var(--text-primary)]">
+                    {data.factor_engine.stage} · {data.factor_engine.score} 分
+                  </div>
+                  <div className="mt-1 text-sm leading-7 text-[var(--text-secondary)]">{data.factor_engine.note}</div>
+                </div>
+              ) : null}
+              {data.trade_filter ? (
+                <div className="rounded-[18px] border border-[var(--border-color)] bg-[rgba(255,255,255,0.03)] px-4 py-3">
+                  <div className="text-[11px] uppercase tracking-[0.18em] text-[var(--text-muted)]">执行过滤</div>
+                  <div className={`mt-2 text-xl font-semibold ${tradeStateClass(data.trade_filter.state)}`}>
+                    {data.trade_filter.state}
+                  </div>
+                  <div className="mt-1 text-sm leading-7 text-[var(--text-secondary)]">{data.trade_filter.reason}</div>
+                  {(data.trade_filter.evidence || []).length ? (
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {data.trade_filter.evidence?.slice(0, 3).map((item) => (
+                        <span key={item} className="module-badge">{item}</span>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+          {(data.factor_engine?.signals || []).length ? (
+            <div className="mt-4 grid gap-2 sm:grid-cols-2">
+              {data.factor_engine?.signals?.slice(0, 4).map((signal) => (
+                <div key={signal.name} className="rounded-[18px] border border-[var(--border-color)] bg-[rgba(255,255,255,0.03)] px-3 py-2">
+                  <div className="text-[11px] uppercase tracking-[0.14em] text-[var(--text-muted)]">{signal.name}</div>
+                  <div className="mt-1 text-sm font-semibold text-[var(--text-primary)]">{signal.verdict}</div>
+                  <div className="text-xs text-[var(--text-secondary)]">{signal.value}</div>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          {data.news_analysis?.lead_event || data.news_analysis?.market_implication ? (
+            <div className="mt-4 rounded-[18px] border border-[var(--border-color)] bg-[rgba(255,255,255,0.03)] px-4 py-3">
+              <div className="text-[11px] uppercase tracking-[0.18em] text-[var(--text-muted)]">事件结论</div>
+              <div className="mt-2 text-sm leading-7 text-[var(--text-primary)]">
+                {data.news_analysis?.lead_event || '当前暂无明确主事件。'}
               </div>
-            </div>
-          </div>
-
-          <div className="grid gap-3 md:grid-cols-3">
-            <MiniMetric
-              label="原因"
-              value={attackName}
-              hint={data.mainlines.logic_a?.reason || '暂无说明'}
-            />
-            <MiniMetric
-              label="昨日"
-              value={data.review?.status || '暂无记录'}
-              hint={data.review?.summary || '今天开始累计记录。'}
-            />
-            <MiniMetric
-              label="数据"
-              value={data.weather.stale ? '降级快照' : '实时摘要'}
-              hint="竞价抓不到时保留结论，不让首页整块失效。"
-            />
-          </div>
-
-          {error ? (
-            <div className="rounded-[20px] border border-[rgba(255,123,136,0.28)] bg-[var(--accent-red-dim)] px-4 py-3 text-sm text-[var(--accent-red)]">
-              当前展示的是最近一次成功结果，后台刷新刚刚失败：{error.message}
+              {data.news_analysis?.market_implication ? (
+                <div className="mt-1 text-sm leading-7 text-[var(--text-secondary)]">
+                  {data.news_analysis.market_implication}
+                </div>
+              ) : null}
             </div>
           ) : null}
         </div>
 
-        <div className="grid gap-4">
-          <StockLane title={`进攻方向 · ${attackName}`} stocks={attackStocks} tone="attack" />
-          <StockLane title={`防守方向 · ${defenseName}`} stocks={defenseStocks} tone="defense" />
+        <div className="module-kpi-grid">
+          <BriefMetric
+            label="阶段"
+            value={data.phase_label || '盘中阶段'}
+            detail={data.action_now || '沿着主线和仓位执行。'}
+          />
+          <BriefMetric
+            label="仓位"
+            value={data.position_text}
+            detail={`进攻 ${data.position.attack}% / 防守 ${data.position.defense}% / 现金 ${data.position.cash}%`}
+          />
+          <BriefMetric
+            label="天气"
+            value={`${data.weather.icon} ${data.weather.weather}`}
+            detail={data.weather.auction_sentiment || data.weather.description || '暂无补充说明'}
+          />
+          <BriefMetric
+            label="执行状态"
+            value={data.trade_filter?.state || '仅观察'}
+            detail={data.trade_filter?.guidance || '等待更多确认后再决定是否放大执行。'}
+          />
+          <BriefMetric
+            label="昨日验证"
+            value={data.review?.status || '暂无记录'}
+            detail={data.review?.summary || '今天开始继续累计。'}
+          />
         </div>
       </div>
-    </section>
+
+      <div className="module-columns xl:grid-cols-2">
+        <StockLane title={attackName} accent="attack" stocks={attackStocks} />
+        <StockLane title={defenseName} accent="defense" stocks={defenseStocks} />
+      </div>
+
+      {data.strategic_views ? (
+        <div className="module-columns xl:grid-cols-2">
+          <div className="module-node">
+            <div className="module-node__label">Long-Term View</div>
+            <div className="module-node__title">{data.strategic_views.long_term.stance}</div>
+            <div className="module-node__copy">{data.strategic_views.long_term.rationale}</div>
+            <div className="mt-4 flex flex-wrap gap-2">
+              {(data.strategic_views.long_term.themes || []).map((theme) => (
+                <span key={theme} className="module-badge">{theme}</span>
+              ))}
+            </div>
+          </div>
+          <div className="module-node">
+            <div className="module-node__label">Short-Term View</div>
+            <div className="module-node__title">{data.strategic_views.short_term.stance}</div>
+            <div className="module-node__copy">{data.strategic_views.short_term.rationale}</div>
+            <div className="mt-4 flex flex-wrap gap-2">
+              {(data.strategic_views.short_term.focus || []).map((theme) => (
+                <span key={theme} className="module-badge">{theme}</span>
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {data.learning_feedback?.summary ? (
+        <div className="module-node">
+          <div className="module-node__label">Self-Correction</div>
+          <div className="module-node__title">复盘纠偏已回灌</div>
+          <div className="module-node__copy">{data.learning_feedback.summary}</div>
+        </div>
+      ) : null}
+
+      {error ? (
+        <div className="rounded-[18px] border border-[rgba(255,123,136,0.2)] bg-[var(--accent-red-dim)] px-4 py-3 text-sm text-[var(--text-secondary)]">
+          当前展示的是最近一次成功结果。后台刷新刚刚失败：{error.message}
+        </div>
+      ) : null}
+    </ModuleShell>
   );
 }

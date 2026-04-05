@@ -2,313 +2,641 @@
 
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import AppShell from '@/components/AppShell';
-import { chatApi } from '@/lib/api';
-import { loadUserSettings } from '@/lib/localSettings';
+import { chatApi, commanderApi } from '@/lib/api';
+import { getProviderLabel } from '@/lib/aiProviders';
+import { defaultSettings, loadUserSettings, type UserSettings } from '@/lib/localSettings';
+import type { CommanderSummary } from '@/types/api';
 
-interface Message {
-  id: number;
-  role: 'user' | 'assistant';
+type MessageRole = 'user' | 'assistant';
+
+interface ChatMessage {
+  id: string;
+  role: MessageRole;
   content: string;
-  stocks?: Stock[];
-  timestamp: Date;
+  timeLabel: string;
 }
 
-interface Stock {
-  name: string;
-  code: string;
-  score: number;
-  reason: string;
+interface ChatSession {
+  id: string;
+  title: string;
+  updatedAt: number;
+  messages: ChatMessage[];
 }
 
-const initialMessages: Message[] = [
-  {
-    id: 1,
+const CHAT_STORAGE_KEY = 'pangang_chat_sessions_v2';
+
+const navLinks = [
+  { href: '/', label: '总览' },
+  { href: '/commander', label: '作战' },
+  { href: '/review', label: '复盘' },
+  { href: '/settings', label: '设置' },
+];
+
+function formatTimeLabel(date = new Date()) {
+  return date.toLocaleTimeString('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function formatSessionDate(timestamp: number) {
+  const date = new Date(timestamp);
+  const now = new Date();
+  const sameDay = date.toDateString() === now.toDateString();
+
+  if (sameDay) {
+    return formatTimeLabel(date);
+  }
+
+  return date.toLocaleDateString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+  });
+}
+
+function createIntroMessage(): ChatMessage {
+  return {
+    id: `intro-${Date.now()}`,
     role: 'assistant',
     content:
-      '我是盘感 AI。适合问主题、问个股、做验证。试试这些问题：\n\n• 今天 AI 算力还能不能继续做？\n• 帮我分析一下宁德时代\n• 我觉得高股息要继续走强，你帮我找证伪点',
-    timestamp: new Date(),
-  },
-];
+      '你好，我是盘感 AI。你可以直接问主线、个股、证伪点，或者把你的判断丢给我，我会先给结论，再给理由和风险点。',
+    timeLabel: '刚刚',
+  };
+}
 
-const quickPrompts = [
-  { label: 'AI 算力', prompt: '今天 AI 算力方向还能不能继续做？' },
-  { label: '宁德时代', prompt: '帮我分析一下宁德时代现在适合低吸还是继续等。' },
-  { label: '高股息', prompt: '我觉得高股息要继续走强，你帮我找证伪点。' },
-  { label: '今日市场', prompt: '今天市场最值得盯的两个方向是什么？' },
-];
+function createSession(): ChatSession {
+  const now = Date.now();
+  return {
+    id: `session-${now}`,
+    title: '新对话',
+    updatedAt: now,
+    messages: [createIntroMessage()],
+  };
+}
 
-function Metric({
-  label,
-  value,
-  hint,
-}: {
-  label: string;
-  value: string;
-  hint: string;
-}) {
-  return (
-    <div className="data-tile">
-      <div className="text-[11px] uppercase tracking-[0.18em] text-[var(--text-muted)]">{label}</div>
-      <div className="mt-2 text-lg font-semibold text-[var(--text-primary)]">{value}</div>
-      <div className="mt-1 text-xs leading-6 text-[var(--text-secondary)]">{hint}</div>
-    </div>
-  );
+function deriveSessionTitle(content: string) {
+  const trimmed = content.replace(/\s+/g, ' ').trim();
+  if (!trimmed) return '新对话';
+  return trimmed.length > 20 ? `${trimmed.slice(0, 20)}...` : trimmed;
+}
+
+function sortSessions(sessions: ChatSession[]) {
+  return [...sessions].sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+function normalizeMessages(value: unknown): ChatMessage[] {
+  if (!Array.isArray(value)) {
+    return [createIntroMessage()];
+  }
+
+  const normalized = value
+    .map((item) => {
+      if (!item || typeof item !== 'object') return null;
+      const record = item as Partial<ChatMessage>;
+      const role = record.role === 'user' ? 'user' : record.role === 'assistant' ? 'assistant' : null;
+      const content = typeof record.content === 'string' ? record.content.trim() : '';
+
+      if (!role || !content) return null;
+
+      return {
+        id: typeof record.id === 'string' ? record.id : `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        role,
+        content,
+        timeLabel: typeof record.timeLabel === 'string' && record.timeLabel ? record.timeLabel : formatTimeLabel(),
+      } satisfies ChatMessage;
+    })
+    .filter((message): message is ChatMessage => Boolean(message));
+
+  return normalized.length > 0 ? normalized : [createIntroMessage()];
+}
+
+function loadChatSessions(): ChatSession[] {
+  if (typeof window === 'undefined') {
+    return [];
+  }
+
+  try {
+    const raw = window.localStorage.getItem(CHAT_STORAGE_KEY);
+    if (!raw) {
+      return [];
+    }
+
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    return sortSessions(
+      parsed
+        .map((item) => {
+          if (!item || typeof item !== 'object') return null;
+          const record = item as Partial<ChatSession>;
+          return {
+            id: typeof record.id === 'string' ? record.id : `session-${Date.now()}`,
+            title: typeof record.title === 'string' && record.title.trim() ? record.title.trim() : '新对话',
+            updatedAt: typeof record.updatedAt === 'number' ? record.updatedAt : Date.now(),
+            messages: normalizeMessages(record.messages),
+          } satisfies ChatSession;
+        })
+        .filter((session): session is ChatSession => Boolean(session))
+    );
+  } catch {
+    return [];
+  }
+}
+
+function saveChatSessions(sessions: ChatSession[]) {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  window.localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(sortSessions(sessions)));
+}
+
+function buildContextPrompt(summary?: CommanderSummary | null) {
+  if (!summary) return '';
+
+  const attack = summary.mainlines.logic_a?.name || '无';
+  const defense = summary.mainlines.logic_b?.name || '无';
+  const event = summary.news_analysis?.lead_event || summary.news_analysis?.headline || '暂无明确主事件';
+  const implication = summary.news_analysis?.market_implication || '暂无明确市场含义';
+  const diagnosis = summary.review?.diagnosis
+    ? `复盘诊断：${summary.review.diagnosis.label}，${summary.review.diagnosis.reason}`
+    : '';
+
+  return [
+    '以下是当前产品上下文，请优先基于这些信息回答：',
+    `当前阶段：${summary.factor_engine?.stage || summary.phase_label || '待确认'} / ${summary.action_now || '等待确认'}`,
+    `执行过滤：${summary.trade_filter?.state || '仅观察'}，${summary.trade_filter?.reason || '暂无原因'}`,
+    `进攻主线：${attack}`,
+    `防守主线：${defense}`,
+    `主事件：${event}`,
+    `市场含义：${implication}`,
+    diagnosis,
+  ]
+    .filter(Boolean)
+    .join('\n');
 }
 
 export default function ChatPage() {
-  const [messages, setMessages] = useState<Message[]>(initialMessages);
+  const [settings, setSettings] = useState<UserSettings>(defaultSettings);
+  const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const [currentSessionId, setCurrentSessionId] = useState('');
   const [input, setInput] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
+  const [loadingSessionId, setLoadingSessionId] = useState<string | null>(null);
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [isReady, setIsReady] = useState(false);
+  const [briefingContext, setBriefingContext] = useState<CommanderSummary | null>(null);
+  const [contextRefreshing, setContextRefreshing] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const settings = loadUserSettings();
-  const aiReady = Boolean(settings.ai.apiKey);
+
+  useEffect(() => {
+    const nextSettings = loadUserSettings();
+    const storedSessions = loadChatSessions();
+    const initialSessions = storedSessions.length > 0 ? storedSessions : [createSession()];
+
+    setSettings(nextSettings);
+    setSessions(initialSessions);
+    setCurrentSessionId(initialSessions[0].id);
+    setIsReady(true);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadContext = async () => {
+      try {
+        setContextRefreshing(true);
+        const summary = await commanderApi.getSummary();
+        if (!cancelled) {
+          setBriefingContext(summary);
+        }
+      } catch {
+        // keep chat usable even if commander context is unavailable
+      } finally {
+        if (!cancelled) {
+          setContextRefreshing(false);
+        }
+      }
+    };
+
+    void loadContext();
+    const interval = window.setInterval(() => {
+      void loadContext();
+    }, 120000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isReady) return;
+    saveChatSessions(sessions);
+  }, [isReady, sessions]);
+
+  useEffect(() => {
+    if (!sessions.length) return;
+
+    const hasCurrent = sessions.some((session) => session.id === currentSessionId);
+    if (!hasCurrent) {
+      setCurrentSessionId(sessions[0].id);
+    }
+  }, [currentSessionId, sessions]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+  }, [currentSessionId, sessions, loadingSessionId]);
+
+  const currentSession = sessions.find((session) => session.id === currentSessionId) ?? sessions[0] ?? null;
+  const messages = currentSession?.messages ?? [];
+  const aiReady = Boolean(settings.ai.apiKey.trim());
+  const providerLabel = getProviderLabel(settings.ai.provider);
+
+  const createAndSelectSession = () => {
+    const nextSession = createSession();
+    setSessions((prev) => sortSessions([nextSession, ...prev]));
+    setCurrentSessionId(nextSession.id);
+    setInput('');
+    setIsHistoryOpen(false);
+    window.setTimeout(() => {
+      textareaRef.current?.focus();
+    }, 0);
+  };
+
+  const updateSession = (sessionId: string, updater: (session: ChatSession) => ChatSession) => {
+    setSessions((prev) =>
+      sortSessions(
+        prev.map((session) => (session.id === sessionId ? updater(session) : session))
+      )
+    );
+  };
+
+  const appendAssistantMessage = (sessionId: string, content: string) => {
+    const now = Date.now();
+    updateSession(sessionId, (session) => ({
+      ...session,
+      updatedAt: now,
+      messages: [
+        ...session.messages,
+        {
+          id: `msg-${now}`,
+          role: 'assistant',
+          content,
+          timeLabel: formatTimeLabel(),
+        },
+      ],
+    }));
+  };
 
   const handleSend = async () => {
-    if (!input.trim() || isLoading) return;
+    if (!input.trim() || loadingSessionId || !currentSession) return;
+
     if (!aiReady) {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: Date.now(),
-          role: 'assistant',
-          content: '当前没有可用的 AI Key。先去设置中心填写智谱 API Key，并把模型名保持为 `glm-4.7-flash`。',
-          timestamp: new Date(),
-        },
-      ]);
+      appendAssistantMessage(
+        currentSession.id,
+        '当前还没有可用的 AI Key。先去设置页完成模型配置，再回来发起真实对话。'
+      );
       return;
     }
 
-    const userMessage: Message = {
-      id: Date.now(),
+    const outgoingContent = input.trim();
+    const activeSessionId = currentSession.id;
+    const userMessage: ChatMessage = {
+      id: `msg-${Date.now()}`,
       role: 'user',
-      content: input.trim(),
-      timestamp: new Date(),
+      content: outgoingContent,
+      timeLabel: formatTimeLabel(),
     };
 
-    setMessages((prev) => [...prev, userMessage]);
     setInput('');
-    setIsLoading(true);
+    setLoadingSessionId(activeSessionId);
+
+    updateSession(activeSessionId, (session) => {
+      const hasRealConversation = session.messages.some((message) => message.role === 'user');
+      return {
+        ...session,
+        title: hasRealConversation ? session.title : deriveSessionTitle(outgoingContent),
+        updatedAt: Date.now(),
+        messages: [...session.messages, userMessage],
+      };
+    });
 
     try {
       const response = await chatApi.send({
         provider: settings.ai.provider || 'zhipu',
         api_key: settings.ai.apiKey,
         model: settings.ai.model || 'glm-4.7-flash',
+        base_url: settings.ai.provider === 'custom' ? settings.ai.baseUrl || undefined : undefined,
         messages: [
           {
             role: 'system',
             content:
-              '你是盘感 AI 投研助手。回答要简洁、直接、专业，优先围绕 A 股、板块趋势、个股逻辑、风险点和执行建议来组织。',
+              '你是盘感 AI 投研助手。回答要简洁、直接、专业，优先给出结论、理由、验证点和证伪点。',
           },
-          ...messages.map((message) => ({
+          ...(briefingContext
+            ? [
+                {
+                  role: 'system' as const,
+                  content: buildContextPrompt(briefingContext),
+                },
+              ]
+            : []),
+          ...currentSession.messages.map((message) => ({
             role: message.role,
             content: message.content,
           })),
           {
             role: 'user',
-            content: userMessage.content,
+            content: outgoingContent,
           },
         ],
       });
 
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: Date.now() + 1,
-          role: 'assistant',
-          content: response.reply,
-          timestamp: new Date(),
-        },
-      ]);
+      appendAssistantMessage(activeSessionId, response.reply);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'AI 对话失败';
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: Date.now() + 1,
-          role: 'assistant',
-          content: `对话请求失败：${errorMessage}\n\n请检查：\n1. API Key 是否有效\n2. 模型名是否为 \`glm-4.7-flash\`\n3. 后端服务是否正常运行`,
-          timestamp: new Date(),
-        },
-      ]);
+      const friendlyMessage = /timed out|超时/i.test(errorMessage)
+        ? `当前模型响应较慢或上游接口暂时拥堵。\n\n已自动延长等待时间；如果仍失败，建议稍后重试，或切换到更快的模型，例如 glm-4.7-flash、glm-4.5-air、qwen-flash。`
+        : `对话请求失败：${errorMessage}\n\n请检查 API Key、模型名和后端服务状态。`;
+      appendAssistantMessage(
+        activeSessionId,
+        friendlyMessage
+      );
     } finally {
-      setIsLoading(false);
+      setLoadingSessionId(null);
     }
   };
 
-  const handleKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
+  const handleKeyPress = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
       void handleSend();
     }
   };
 
   return (
-    <AppShell
-      title="AI 助手"
-      subtitle="这里不做花架子，只保留当前引擎、快捷问题和对话主线程。"
-      badge="解释层"
-      maxWidthClassName="max-w-6xl"
-      contentClassName="space-y-5 pb-40"
-      showMobileNav={false}
-      actions={(
-        <div className="flex flex-wrap gap-2">
-          <Link href="/commander" className="btn btn-secondary px-4 py-2 text-sm">
-            作战室
-          </Link>
-          <Link href="/settings" className="btn btn-secondary px-4 py-2 text-sm">
-            设置中心
-          </Link>
-        </div>
-      )}
-    >
-      <section className="surface-panel animate-stage p-5">
-        <div className="grid gap-3 md:grid-cols-4">
-          <Metric label="引擎" value={settings.ai.provider || '未设置'} hint={settings.ai.model || '未设置模型'} />
-          <Metric label="状态" value={aiReady ? '已配置' : '未配置'} hint={aiReady ? '可以直接发起真实对话' : '先去设置页填写 API Key'} />
-          <Metric label="线程" value={`${messages.length}`} hint="当前对话消息数" />
-          <Metric label="用途" value="问主题 / 问个股 / 做验证" hint="今天的执行动作仍回到作战室确认" />
-        </div>
-      </section>
+    <div className="min-h-screen bg-[var(--bg-primary)] text-[var(--text-primary)]">
+      <div className="flex min-h-screen">
+        <aside className="hidden w-[300px] shrink-0 border-r border-[var(--border-color)] bg-[rgba(5,14,21,0.9)] xl:flex xl:flex-col">
+          <div className="border-b border-[var(--border-color)] px-5 py-5">
+            <Link href="/" className="flex items-center gap-3">
+              <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-[rgba(255,255,255,0.06)] font-mono text-sm font-semibold">
+                PG
+              </span>
+              <div>
+                <div className="text-sm font-semibold text-[var(--text-primary)]">盘感 AI</div>
+                <div className="mt-1 text-xs text-[var(--text-secondary)]">Chat Workspace</div>
+              </div>
+            </Link>
+          </div>
 
-      <div className="grid gap-5 xl:grid-cols-[300px_minmax(0,1fr)]">
-        <section className="surface-panel animate-stage p-5">
-          <div className="text-lg font-semibold text-[var(--text-primary)]">快捷问题</div>
-          <div className="mt-4 grid gap-3">
-            {quickPrompts.map((item) => (
+          <div className="border-b border-[var(--border-color)] px-4 py-4">
+            <button type="button" onClick={createAndSelectSession} className="btn btn-primary w-full px-4 py-3 text-sm">
+              新对话
+            </button>
+          </div>
+
+          <nav className="border-b border-[var(--border-color)] px-3 py-3">
+            <div className="grid gap-1">
+              {navLinks.map((link) => (
+                <Link
+                  key={link.href}
+                  href={link.href}
+                  className="rounded-2xl px-3 py-2 text-sm text-[var(--text-secondary)] transition hover:bg-[rgba(255,255,255,0.04)] hover:text-[var(--text-primary)]"
+                >
+                  {link.label}
+                </Link>
+              ))}
+            </div>
+          </nav>
+
+          <div className="px-5 pt-4 text-xs uppercase tracking-[0.18em] text-[var(--text-muted)]">
+            历史对话
+          </div>
+
+          <div className="flex-1 space-y-2 overflow-y-auto px-3 py-3">
+            {sessions.map((session) => (
               <button
-                key={item.label}
+                key={session.id}
                 type="button"
-                onClick={() => setInput(item.prompt)}
-                className="action-card compact text-left"
+                onClick={() => setCurrentSessionId(session.id)}
+                className={`w-full rounded-[20px] px-4 py-3 text-left transition ${
+                  session.id === currentSessionId
+                    ? 'bg-[rgba(255,255,255,0.06)] text-[var(--text-primary)]'
+                    : 'text-[var(--text-secondary)] hover:bg-[rgba(255,255,255,0.035)] hover:text-[var(--text-primary)]'
+                }`}
               >
-                <div className="action-label">填入问题</div>
-                <div className="mt-3 text-sm font-semibold text-[var(--text-primary)]">{item.label}</div>
-                <div className="mt-1 text-xs leading-6 text-[var(--text-secondary)]">{item.prompt}</div>
+                <div className="truncate text-sm font-medium">{session.title}</div>
+                <div className="mt-1 text-xs text-[var(--text-muted)]">{formatSessionDate(session.updatedAt)}</div>
               </button>
             ))}
           </div>
-        </section>
+        </aside>
 
-        <section className="surface-panel animate-stage p-5">
-          <div className="flex items-center justify-between gap-3">
-            <div className="text-lg font-semibold text-[var(--text-primary)]">对话主线程</div>
-            <div className="metric-chip"><strong>{messages.length} 条消息</strong></div>
-          </div>
-
-          <div className="mt-4 space-y-4">
-            {messages.map((message) => (
-              <MessageBubble key={message.id} message={message} />
-            ))}
-
-            {isLoading ? (
-              <div className="flex items-start gap-3">
-                <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-[var(--accent-green)]/15 shadow-[0_0_0_1px_rgba(90,242,181,0.18)]">
-                  <SparkleIcon className="h-4 w-4 text-[var(--accent-green)]" />
-                </div>
-                <div className="rounded-[20px] border border-[var(--border-color)] bg-[var(--bg-card)] px-4 py-3">
-                  <div className="text-sm text-[var(--text-secondary)]">AI 正在思考...</div>
+        <section className="flex min-w-0 flex-1 flex-col">
+          <header className="border-b border-[var(--border-color)] bg-[rgba(6,16,24,0.92)] px-4 py-3 backdrop-blur-xl md:px-6">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex min-w-0 items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsHistoryOpen(true)}
+                  className="btn btn-secondary px-3 py-2 text-xs xl:hidden"
+                >
+                  历史
+                </button>
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-medium text-[var(--text-primary)]">
+                    {currentSession?.title || '新对话'}
+                  </div>
+                  <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-[var(--text-muted)]">
+                    <span>{providerLabel}</span>
+                    <span>·</span>
+                    <span>{settings.ai.model || '未设置模型'}</span>
+                    <span>·</span>
+                    <span>{aiReady ? '已连接' : '待配置'}</span>
+                  </div>
                 </div>
               </div>
-            ) : null}
 
-            <div ref={messagesEndRef} />
+              <div className="flex items-center gap-2">
+                <button type="button" onClick={createAndSelectSession} className="btn btn-secondary px-3 py-2 text-xs">
+                  新对话
+                </button>
+                <Link href="/settings" className="btn btn-secondary px-3 py-2 text-xs">
+                  设置
+                </Link>
+              </div>
+            </div>
+          </header>
+
+          {!aiReady ? (
+            <div className="border-b border-[rgba(246,199,125,0.16)] bg-[rgba(246,199,125,0.08)] px-4 py-3 text-sm text-[var(--text-secondary)] md:px-6">
+              当前未配置可用的 AI Key。先去
+              <Link href="/settings" className="mx-1 text-[var(--accent-gold)] underline decoration-transparent transition hover:decoration-inherit">
+                设置页
+              </Link>
+              完成模型配置，再回来开始真实对话。
+            </div>
+          ) : null}
+
+          {briefingContext ? (
+            <div className="border-b border-[var(--border-color)] bg-[rgba(255,255,255,0.02)] px-4 py-3 text-sm text-[var(--text-secondary)] md:px-6">
+              <div className="mx-auto flex w-full max-w-4xl flex-wrap items-center gap-2">
+                <span className="module-badge">阶段 {briefingContext.factor_engine?.stage || briefingContext.phase_label || '待确认'}</span>
+                <span className="module-badge">{briefingContext.trade_filter?.state || '仅观察'}</span>
+                <span className="module-badge">A {briefingContext.mainlines.logic_a?.name || '无'}</span>
+                <span className="module-badge">B {briefingContext.mainlines.logic_b?.name || '无'}</span>
+                {(briefingContext.news_analysis?.lead_event || briefingContext.news_analysis?.headline) ? (
+                  <span className="text-xs text-[var(--text-muted)]">
+                    主事件：{briefingContext.news_analysis?.lead_event || briefingContext.news_analysis?.headline}
+                  </span>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      setContextRefreshing(true);
+                      const summary = await commanderApi.getSummary();
+                      setBriefingContext(summary);
+                    } finally {
+                      setContextRefreshing(false);
+                    }
+                  }}
+                  className="btn btn-secondary ml-auto px-3 py-2 text-xs"
+                >
+                  {contextRefreshing ? '刷新上下文中...' : '刷新上下文'}
+                </button>
+              </div>
+            </div>
+          ) : null}
+
+          <div className="flex min-h-0 flex-1 flex-col">
+            <div className="flex-1 overflow-y-auto px-4 py-6 md:px-6">
+              <div className="mx-auto flex w-full max-w-4xl flex-col gap-6">
+                {!isReady || !currentSession ? (
+                  <div className="flex min-h-[48vh] items-center justify-center text-sm text-[var(--text-secondary)]">
+                    正在准备对话...
+                  </div>
+                ) : (
+                  <>
+                    {messages.map((message) => (
+                      <MessageBubble key={message.id} message={message} />
+                    ))}
+
+                    {loadingSessionId === currentSession.id ? (
+                      <div className="flex items-start gap-3">
+                        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[var(--accent-cyan-dim)] text-sm font-semibold text-[var(--accent-cyan)]">
+                          AI
+                        </div>
+                        <div className="rounded-[22px] border border-[var(--border-color)] bg-[rgba(255,255,255,0.03)] px-4 py-3 text-sm text-[var(--text-secondary)]">
+                          正在思考...
+                        </div>
+                      </div>
+                    ) : null}
+                  </>
+                )}
+
+                <div ref={messagesEndRef} />
+              </div>
+            </div>
+
+            <div className="px-4 pb-4 pt-3 md:px-6 md:pb-6">
+              <div className="mx-auto w-full max-w-4xl rounded-[28px] border border-[var(--border-color)] bg-[rgba(8,18,28,0.9)] p-3 shadow-[0_16px_48px_rgba(0,0,0,0.22)]">
+                <textarea
+                  ref={textareaRef}
+                  value={input}
+                  onChange={(event) => setInput(event.target.value)}
+                  onKeyDown={handleKeyPress}
+                  placeholder="输入你的问题..."
+                  className="min-h-[120px] w-full resize-none bg-transparent px-2 py-2 text-sm leading-7 text-[var(--text-primary)] outline-none placeholder:text-[var(--text-muted)]"
+                  rows={5}
+                />
+                <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--border-color)] px-2 pt-3">
+                  <div className="text-xs text-[var(--text-muted)]">Enter 发送，Shift + Enter 换行</div>
+                  <button
+                    onClick={() => void handleSend()}
+                    disabled={!input.trim() || Boolean(loadingSessionId) || !currentSession}
+                    className="btn btn-primary min-w-[108px] px-5 py-3 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {loadingSessionId ? '发送中' : '发送'}
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
         </section>
       </div>
 
-      <div className="fixed bottom-0 left-0 right-0 border-t border-[var(--border-color)] bg-[var(--bg-primary)]/94 backdrop-blur-xl">
-        <div className="mx-auto max-w-6xl px-4 py-3">
-          <div className="rounded-[22px] border border-[var(--border-color)] bg-[rgba(9,19,28,0.9)] p-3 shadow-[0_18px_50px_rgba(0,0,0,0.28)]">
-            <div className="flex items-end gap-3">
-              <textarea
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={handleKeyPress}
-                placeholder="输入你的问题、投资假设或想验证的逻辑..."
-                className="input min-h-[60px] max-h-[140px] flex-1 resize-none rounded-[18px]"
-                rows={1}
-              />
-              <button
-                onClick={() => void handleSend()}
-                disabled={!input.trim() || isLoading}
-                className="btn btn-primary px-4 py-3 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                <SendIcon />
+      {isHistoryOpen ? (
+        <div className="fixed inset-0 z-[70] bg-[rgba(1,7,12,0.76)] backdrop-blur-sm xl:hidden">
+          <div className="flex h-full w-[86%] max-w-[320px] flex-col border-r border-[var(--border-color)] bg-[rgba(5,14,21,0.98)]">
+            <div className="flex items-center justify-between border-b border-[var(--border-color)] px-4 py-4">
+              <div>
+                <div className="text-sm font-semibold text-[var(--text-primary)]">历史对话</div>
+                <div className="mt-1 text-xs text-[var(--text-secondary)]">切换会话或新建</div>
+              </div>
+              <button type="button" onClick={() => setIsHistoryOpen(false)} className="btn btn-secondary px-3 py-2 text-xs">
+                关闭
               </button>
+            </div>
+
+            <div className="border-b border-[var(--border-color)] px-4 py-4">
+              <button type="button" onClick={createAndSelectSession} className="btn btn-primary w-full px-4 py-3 text-sm">
+                新对话
+              </button>
+            </div>
+
+            <div className="flex-1 space-y-2 overflow-y-auto px-3 py-3">
+              {sessions.map((session) => (
+                <button
+                  key={session.id}
+                  type="button"
+                  onClick={() => {
+                    setCurrentSessionId(session.id);
+                    setIsHistoryOpen(false);
+                  }}
+                  className={`w-full rounded-[18px] px-4 py-3 text-left transition ${
+                    session.id === currentSessionId
+                      ? 'bg-[rgba(255,255,255,0.06)] text-[var(--text-primary)]'
+                      : 'text-[var(--text-secondary)] hover:bg-[rgba(255,255,255,0.035)] hover:text-[var(--text-primary)]'
+                  }`}
+                >
+                  <div className="truncate text-sm font-medium">{session.title}</div>
+                  <div className="mt-1 text-xs text-[var(--text-muted)]">{formatSessionDate(session.updatedAt)}</div>
+                </button>
+              ))}
             </div>
           </div>
         </div>
-      </div>
-    </AppShell>
+      ) : null}
+    </div>
   );
 }
 
-function MessageBubble({ message }: { message: Message }) {
+function MessageBubble({ message }: { message: ChatMessage }) {
   const isUser = message.role === 'user';
-  const roleLabel = isUser ? '你' : '盘感AI';
 
   return (
-    <div className={`flex items-start gap-3 ${isUser ? 'flex-row-reverse' : ''}`}>
-      <div
-        className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl shadow-[0_0_0_1px_rgba(255,255,255,0.05)] ${
-          isUser ? 'bg-[var(--bg-card)]' : 'bg-[var(--accent-green)]/15'
-        }`}
-      >
-        {isUser ? (
-          <UserIcon className="h-4 w-4 text-[var(--text-secondary)]" />
-        ) : (
-          <SparkleIcon className="h-4 w-4 text-[var(--accent-green)]" />
-        )}
-      </div>
-
-      <div className={`max-w-[84%] ${isUser ? 'text-right' : ''}`}>
-        <div className="mb-1 flex items-center gap-2 text-xs text-[var(--text-muted)]">
-          <span
-            className={`rounded-full px-2 py-1 ${
-              isUser ? 'bg-[var(--accent-gold-dim)] text-[var(--accent-gold)]' : 'bg-[var(--accent-green-dim)] text-[var(--accent-green)]'
-            }`}
-          >
-            {roleLabel}
-          </span>
-          <span>{message.timestamp.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</span>
+    <div className={`flex gap-3 ${isUser ? 'justify-end' : 'justify-start'}`}>
+      {!isUser ? (
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[var(--accent-cyan-dim)] text-sm font-semibold text-[var(--accent-cyan)]">
+          AI
         </div>
+      ) : null}
 
+      <div className={`max-w-[88%] ${isUser ? 'text-right' : ''}`}>
+        <div className={`mb-1.5 text-xs text-[var(--text-muted)] ${isUser ? 'text-right' : ''}`}>{message.timeLabel}</div>
         <div
-          className={`rounded-[20px] border px-4 py-4 ${
+          className={`rounded-[24px] px-4 py-3 text-sm leading-7 ${
             isUser
-              ? 'border-[rgba(246,199,125,0.18)] bg-[linear-gradient(135deg,rgba(246,199,125,0.92),rgba(141,220,255,0.78))] text-[#061018]'
-              : 'border-[var(--border-color)] bg-[var(--bg-card)]/95'
+              ? 'bg-[linear-gradient(135deg,rgba(246,199,125,0.96),rgba(141,220,255,0.88))] text-[#061018]'
+              : 'border border-[var(--border-color)] bg-[rgba(255,255,255,0.03)] text-[var(--text-primary)]'
           }`}
         >
           <FormattedMessageContent content={message.content} isUser={isUser} />
         </div>
-
-        {message.stocks?.length ? (
-          <div className="mt-3 space-y-2">
-            {message.stocks.map((stock) => (
-              <Link
-                key={stock.code}
-                href={`/stock/${stock.code}`}
-                className="data-tile flex items-center justify-between gap-3 text-left"
-              >
-                <div>
-                  <div className="font-medium text-[var(--text-primary)]">{stock.name}</div>
-                  <div className="mt-1 text-xs text-[var(--text-muted)]">{stock.code}</div>
-                </div>
-                <div className="text-right">
-                  <div className="score text-sm">⭐ {stock.score}</div>
-                  <div className="mt-1 text-xs text-[var(--text-secondary)]">{stock.reason}</div>
-                </div>
-              </Link>
-            ))}
-          </div>
-        ) : null}
       </div>
     </div>
   );
@@ -318,17 +646,17 @@ function FormattedMessageContent({ content, isUser }: { content: string; isUser:
   const blocks = content.split('\n\n').filter(Boolean);
 
   return (
-    <div className="space-y-3 text-sm leading-7">
+    <div className="space-y-3">
       {blocks.map((block, index) => {
         const lines = block.split('\n').filter(Boolean);
         const isBulletGroup = lines.every((line) => /^(\s*[-•]|\d+\.)\s+/.test(line));
 
         if (isBulletGroup) {
           return (
-            <ul key={`${index}-${lines[0]}`} className={`space-y-2 ${isUser ? 'text-[#061018]/88' : 'text-[var(--text-secondary)]'}`}>
+            <ul key={`${index}-${lines[0]}`} className="space-y-2">
               {lines.map((line, lineIndex) => (
                 <li key={`${lineIndex}-${line}`} className="flex gap-2">
-                  <span className={isUser ? 'text-[#061018]/60' : 'text-[var(--accent-green)]'}>•</span>
+                  <span className={isUser ? 'text-[#061018]/60' : 'text-[var(--accent-cyan)]'}>•</span>
                   <span>{renderInline(line.replace(/^(\s*[-•]|\d+\.)\s+/, ''))}</span>
                 </li>
               ))}
@@ -336,11 +664,7 @@ function FormattedMessageContent({ content, isUser }: { content: string; isUser:
           );
         }
 
-        return (
-          <p key={`${index}-${lines[0]}`} className={isUser ? 'text-[#061018]/90' : 'text-[var(--text-secondary)]'}>
-            {renderInline(block)}
-          </p>
-        );
+        return <p key={`${index}-${lines[0]}`}>{renderInline(block)}</p>;
       })}
     </div>
   );
@@ -365,32 +689,4 @@ function renderInline(text: string) {
     }
     return token;
   });
-}
-
-function SparkleIcon({ className = '' }: { className?: string }) {
-  return (
-    <svg className={className} fill="currentColor" viewBox="0 0 24 24">
-      <path d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" />
-    </svg>
-  );
-}
-
-function SendIcon() {
-  return (
-    <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-    </svg>
-  );
-}
-
-function UserIcon({ className = '' }: { className?: string }) {
-  return (
-    <svg className={className} fill="currentColor" viewBox="0 0 24 24">
-      <path
-        fillRule="evenodd"
-        d="M7.5 6a4.5 4.5 0 119 0 4.5 4.5 0 01-9 0zM3.751 20.105a8.25 8.25 0 0116.498 0 .75.75 0 01-.437.695A18.683 18.683 0 0112 22.5c-2.786 0-5.433-.608-7.812-1.7a.75.75 0 01-.437-.695z"
-        clipRule="evenodd"
-      />
-    </svg>
-  );
 }

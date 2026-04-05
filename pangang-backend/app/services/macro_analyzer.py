@@ -6,41 +6,30 @@ from dotenv import load_dotenv
 
 load_dotenv()
 from typing import Dict, List, Any, Optional
-from zhipuai import ZhipuAI
 from ..data_provider import DataFetcherManager
 from datetime import datetime, timedelta
+from ..core.ai_client import request_chat_completion
+from ..core.ai_provider_registry import resolve_provider_api_key, resolve_provider_model
 
 logger = logging.getLogger(__name__)
 
 class MacroAnalyzer:
     def __init__(self):
         self.data_manager = DataFetcherManager()
-        self.api_key = os.getenv("ZHIPUAI_API_KEY")
-        self.default_model = os.getenv("ZHIPUAI_MODEL", "glm-4.7-flash")
-        if not self.api_key:
-            logger.warning("ZHIPUAI_API_KEY not found")
-            self.client = None
-        else:
-            self.client = ZhipuAI(api_key=self.api_key)
-
-    def _build_client(self, api_key: Optional[str] = None) -> Optional[ZhipuAI]:
-        key = api_key or self.api_key
-        if not key:
-            return None
-        if api_key:
-            return ZhipuAI(api_key=api_key)
-        return self.client
 
     async def generate_strategy_dashboard(
         self,
+        provider: Optional[str] = "zhipu",
         api_key: Optional[str] = None,
         model: Optional[str] = None,
+        base_url: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         生成宏观战略仪表盘内容
         """
-        selected_model = model or self.default_model
-        client = self._build_client(api_key)
+        selected_provider = (provider or "zhipu").lower()
+        selected_model = resolve_provider_model(selected_provider, model) or model or "glm-4.7-flash"
+        resolved_api_key = resolve_provider_api_key(selected_provider, api_key)
         try:
             # 1. 获取基础数据
             macro_data = self.data_manager.fetch_macro_data()
@@ -59,7 +48,7 @@ class MacroAnalyzer:
             prompt = self._build_macro_prompt(macro_data, news_list, market_indices, hot_sectors=hot_sectors, trending=trending_news)
             
             # 3. 调用 AI
-            if not client:
+            if not resolved_api_key:
                 logger.warning("No API Key, using Rule-Based Strategy")
                 result = await self._generate_rule_based_strategy(macro_data, market_indices, hot_sectors=hot_sectors)
                 result["engine"] = {
@@ -69,12 +58,16 @@ class MacroAnalyzer:
                 }
                 return result
 
-            response = client.chat.completions.create(
+            response = request_chat_completion(
+                provider=selected_provider,
+                api_key=resolved_api_key,
                 model=selected_model,
+                base_url=base_url,
                 messages=[{"role": "user", "content": prompt}],
-                temperature=0.1
+                temperature=0.1,
+                timeout=45.0,
             )
-            result_json = self._parse_ai_response(response.choices[0].message.content)
+            result_json = self._parse_ai_response(response["reply"])
             
             # 4. 补充实时行情数据 (Verification of catalyst candidates)
             # result_json should contain candidate lists. We can check their realtime price here if needed.
@@ -82,13 +75,32 @@ class MacroAnalyzer:
             
             return {
                 "timestamp": datetime.now().isoformat(),
+                "news_brief": result_json.get("news_brief") or self._build_news_brief(news_list, trending_news, hot_sectors),
+                "cycle_framework": result_json.get("cycle_framework") or self._derive_cycle_framework(
+                    macro_data,
+                    market_indices,
+                    trending_news,
+                    hot_sectors,
+                ),
+                "long_term_view": result_json.get("long_term_view") or self._derive_long_term_view(
+                    news_list,
+                    trending_news,
+                    hot_sectors,
+                    macro_data,
+                    market_indices,
+                ),
+                "short_term_view": result_json.get("short_term_view") or self._derive_short_term_view(
+                    hot_sectors,
+                    market_indices,
+                    trending_news,
+                ),
                 "macro_mainline": result_json.get("macro_mainline", {}),
                 "catalysts": result_json.get("catalysts", []),
                 "defense": result_json.get("defense", {}),
                 "operational_logic": result_json.get("operational_logic", "市场不明朗，建议观望"),
                 "trending": trending_news[:5] if trending_news else [],
                 "engine": {
-                    "provider": "zhipu",
+                    "provider": selected_provider,
                     "model": selected_model,
                     "used_api": True,
                 }
@@ -182,6 +194,16 @@ class MacroAnalyzer:
         注意：舆情热搜反映市场情绪面，请结合量价数据判断是否有真正驱动力。
 
         【输出严格三层结构】
+        0. 新闻模块（先新闻，后判断）：
+           - 从近3日新闻和实时舆情中挑出最影响盘面的 3 条。
+           - 每条必须给出标题、来源、以及“它为什么重要”。
+
+        0.5 周期框架（用机构常见的三层拆法）：
+           - secular：长线主题/康波或技术大周期
+           - cyclical：1-4季度的宏观/信用/盈利周期位置
+           - tactical：1-10日的交易环境
+           - summary：一句话总结这三层为什么会导向当前结论
+
         1. 顶层（3-12个月主线）：
            - 只有在“政策落地”且“市场放量上涨”双重确认时，才定义为“复苏期”。
            - narrative必须是叙事性描述，解释“为什么”而不仅是结论。
@@ -204,8 +226,33 @@ class MacroAnalyzer:
            - 格式：先仓位，再逻辑，再“后续关注信号”。
            - 评分：1-10分。若环境为“主跌风险”或涨停<10家，评分强制不超过5分。
 
+        5. 长线建议与短线建议：
+           - long_term_view：基于新闻和长期技术/产业趋势，给出 6-24 个月可持续关注的方向。
+           - short_term_view：基于当前量价、情绪和催化，给出 1-10 日的执行建议。
+           - 长线和短线必须明确区分，不要混在一起。
+
         【输出格式 JSON】
         {{
+            "news_brief": [
+                {{"title": "AI大会释放产业信号", "source": "行业会议", "impact": "强化AI、芯片、机器人中长期主线"}}
+            ],
+            "cycle_framework": {{
+                "secular": "数字化与智能化仍是长波主线",
+                "cyclical": "盈利与信用仍处于修复早期",
+                "tactical": "当前适合盯量价共振的强催化方向",
+                "summary": "长线看产业升级，短线要等市场确认后再加仓"
+            }},
+            "long_term_view": {{
+                "stance": "中性偏多",
+                "themes": ["人工智能", "半导体", "机器人"],
+                "rationale": "这些方向受产业升级和政策支持驱动，适合中长线跟踪。"
+            }},
+            "short_term_view": {{
+                "stance": "聚焦核心",
+                "focus": ["AI算力", "量价共振板块"],
+                "rationale": "短线只做有催化和量价确认的方向。",
+                "risk_trigger": "若涨停家数持续低于10家，降低仓位"
+            }},
             "macro_mainline": {{
                 "cycle_stage": "主跌风险", 
                 "narrative": "市场进入防御模式。PMI(49.3)低于荣枯线，大盘下跌1.2%，涨停仅5家...扭转信号：XXX", 
@@ -234,6 +281,213 @@ class MacroAnalyzer:
             tag_str = f" [{tags}]" if tags else ""
             lines.append(f"- [{item.get('source', '')}] {item.get('title', '')}{tag_str}")
         return "\n".join(lines)
+
+    def _collect_theme_hits(
+        self,
+        news: Optional[List[Dict]] = None,
+        trending: Optional[List[Dict]] = None,
+        hot_sectors: Optional[List[Dict]] = None,
+    ) -> Dict[str, Dict[str, Any]]:
+        theme_library = {
+            "人工智能": {
+                "keywords": ["ai", "人工智能", "大模型", "算力", "gpu", "模型"],
+                "secular": "数字化与智能化仍是长波主线",
+                "rationale": "AI 正在重塑软件、算力和终端，符合大型机构常见的长期技术升级主线。",
+            },
+            "半导体": {
+                "keywords": ["半导体", "芯片", "先进制程", "存储", "光刻"],
+                "secular": "科技自主与算力基础设施建设持续推进",
+                "rationale": "芯片既是 AI 基础设施，也受益于国产替代和资本开支周期。",
+            },
+            "机器人": {
+                "keywords": ["机器人", "自动化", "人形机器人", "工业自动化"],
+                "secular": "自动化升级仍处于渗透率提升阶段",
+                "rationale": "机器人是 AI 外溢到实体制造的关键受益方向，长线逻辑顺。",
+            },
+            "电力能源": {
+                "keywords": ["电力", "能源", "储能", "电网", "核电"],
+                "secular": "能源安全与算力耗电需求共同抬升",
+                "rationale": "能源与电网既有防守属性，也受益于 AI 与制造升级带来的用电需求。",
+            },
+            "高股息": {
+                "keywords": ["高股息", "银行", "煤炭", "石油", "公用事业"],
+                "secular": "低增速环境下现金流资产仍有配置价值",
+                "rationale": "当盈利与信用修复不足时，机构常用高股息与防守资产对冲波动。",
+            },
+        }
+
+        hits: Dict[str, Dict[str, Any]] = {}
+
+        def ingest(text: str, source: str):
+            lower = text.lower()
+            for theme, config in theme_library.items():
+                for keyword in config["keywords"]:
+                    if keyword.lower() in lower:
+                        item = hits.setdefault(
+                            theme,
+                            {
+                                "score": 0,
+                                "sources": set(),
+                                "secular": config["secular"],
+                                "rationale": config["rationale"],
+                            },
+                        )
+                        item["score"] += 1
+                        item["sources"].add(source)
+                        break
+
+        for item in news or []:
+            ingest(f"{item.get('title', '')} {item.get('summary', '')}", "news")
+        for item in trending or []:
+            ingest(f"{item.get('title', '')} {' '.join(item.get('tags', []))}", "trending")
+        for item in hot_sectors or []:
+            ingest(f"{item.get('name', '')} {item.get('recommendation', '')}", "hot_sector")
+
+        return hits
+
+    def _build_news_brief(
+        self,
+        news: Optional[List[Dict]] = None,
+        trending: Optional[List[Dict]] = None,
+        hot_sectors: Optional[List[Dict]] = None,
+    ) -> List[Dict[str, str]]:
+        cards: List[Dict[str, str]] = []
+
+        for item in (trending or [])[:2]:
+            cards.append({
+                "title": item.get("title", "市场热议"),
+                "source": item.get("source", "舆情"),
+                "impact": "这条新闻正在影响市场关注度和题材定价。",
+            })
+
+        for item in (hot_sectors or [])[:1]:
+            cards.append({
+                "title": item.get("name", "板块信号"),
+                "source": "量价扫描",
+                "impact": f"该板块出现量价确认，短线更值得跟踪。涨幅{item.get('change', 0):.1f}% / 换手{item.get('turnover', 0):.1f}%。",
+            })
+
+        if len(cards) < 3:
+            for item in (news or [])[: 3 - len(cards)]:
+                cards.append({
+                    "title": item.get("title", "宏观新闻"),
+                    "source": item.get("date", "新闻"),
+                    "impact": "这条新闻会影响中期政策预期和行业主线。",
+                })
+
+        return cards[:3]
+
+    def _derive_cycle_framework(
+        self,
+        macro: Optional[Dict],
+        market: Optional[Dict],
+        trending: Optional[List[Dict]] = None,
+        hot_sectors: Optional[List[Dict]] = None,
+    ) -> Dict[str, str]:
+        pmi_val = 50.0
+        if macro and 'pmi' in macro:
+            try:
+                pmi_val = float(macro['pmi'])
+            except Exception:
+                pass
+
+        index_change = market.get('index', {}).get('change', 0) if market else 0
+        limit_up = market.get('limit_up', 0) if market else 0
+        north_flow = market.get('northFlow', 0) if market else 0
+
+        hits = self._collect_theme_hits(trending=trending, hot_sectors=hot_sectors)
+        top_theme = max(hits.items(), key=lambda item: item[1]["score"])[0] if hits else "高股息"
+        secular = hits.get(top_theme, {}).get("secular", "长波主线暂不鲜明，先以现金流资产和确定性主线为主。")
+
+        if pmi_val >= 50 and north_flow > 0:
+            cyclical = "盈利与风险偏好处于修复早期，可逐步增加成长主线权重。"
+        elif pmi_val < 50 and index_change < 0:
+            cyclical = "宏观与市场仍偏收缩，先把仓位放在防守和高确定性方向。"
+        else:
+            cyclical = "当前处于震荡修复阶段，主线存在但需要等待市场确认。"
+
+        if limit_up >= 30 and index_change > 0:
+            tactical = "短线环境允许进攻，优先看有催化和量价确认的核心方向。"
+        elif limit_up < 10 or index_change < -0.5:
+            tactical = "短线环境偏弱，先防守，不追没有确认的新闻刺激。"
+        else:
+            tactical = "短线以聚焦核心为主，分化环境下不宜铺太开。"
+
+        return {
+            "secular": secular,
+            "cyclical": cyclical,
+            "tactical": tactical,
+            "summary": "用长期产业趋势决定方向，用中期宏观周期决定仓位，用短线交易环境决定执行节奏。",
+        }
+
+    def _derive_long_term_view(
+        self,
+        news: Optional[List[Dict]] = None,
+        trending: Optional[List[Dict]] = None,
+        hot_sectors: Optional[List[Dict]] = None,
+        macro: Optional[Dict] = None,
+        market: Optional[Dict] = None,
+    ) -> Dict[str, Any]:
+        hits = self._collect_theme_hits(news=news, trending=trending, hot_sectors=hot_sectors)
+        ranked = sorted(hits.items(), key=lambda item: item[1]["score"], reverse=True)
+        themes = [name for name, _ in ranked[:3]] or ["人工智能", "半导体", "高股息"]
+
+        pmi_val = 50.0
+        if macro and 'pmi' in macro:
+            try:
+                pmi_val = float(macro['pmi'])
+            except Exception:
+                pass
+
+        if pmi_val >= 50:
+            stance = "中性偏多"
+            rationale_prefix = "长线可以围绕产业升级主线逐步布局，优先跟踪景气度与资本开支共振的方向。"
+        else:
+            stance = "中性"
+            rationale_prefix = "长线方向仍可跟踪，但节奏要慢，更适合分批观察而不是一次性重仓。"
+
+        theme_reasons = [hits.get(theme, {}).get("rationale", f"{theme}具备长期配置价值。") for theme in themes]
+        rationale = f"{rationale_prefix} " + " ".join(theme_reasons[:2])
+
+        return {
+            "stance": stance,
+            "themes": themes,
+            "rationale": rationale.strip(),
+        }
+
+    def _derive_short_term_view(
+        self,
+        hot_sectors: Optional[List[Dict]] = None,
+        market: Optional[Dict] = None,
+        trending: Optional[List[Dict]] = None,
+    ) -> Dict[str, Any]:
+        index_change = market.get('index', {}).get('change', 0) if market else 0
+        limit_up = market.get('limit_up', 0) if market else 0
+        north_flow = market.get('northFlow', 0) if market else 0
+
+        focus = [item.get("name", "热点板块") for item in (hot_sectors or [])[:3]]
+        if not focus:
+            hits = self._collect_theme_hits(trending=trending, hot_sectors=hot_sectors)
+            focus = [name for name, _ in sorted(hits.items(), key=lambda item: item[1]["score"], reverse=True)[:2]] or ["高股息防守", "量价共振方向"]
+
+        if limit_up >= 30 and index_change > 0:
+            stance = "可进攻"
+            rationale = "短线可以围绕量价共振最强的 1-2 个方向执行，优先龙头和中军，不追无确认后排。"
+        elif limit_up < 10 or index_change < -0.5 or north_flow < -20:
+            stance = "先防守"
+            rationale = "短线先看防守和等待确认，新闻再热也要等量价和市场环境配合后再出手。"
+        else:
+            stance = "聚焦核心"
+            rationale = "短线适合小范围聚焦，盯催化最清晰和量价最配合的方向，不宜面铺得太大。"
+
+        risk_trigger = "若涨停家数持续低于10家、北向资金再度大幅流出，短线建议进一步收缩仓位。"
+
+        return {
+            "stance": stance,
+            "focus": focus,
+            "rationale": rationale,
+            "risk_trigger": risk_trigger,
+        }
 
     def _parse_ai_response(self, text: str) -> Dict:
         try:
@@ -410,6 +664,20 @@ class MacroAnalyzer:
 
         return {
             "timestamp": datetime.now().isoformat(),
+            "news_brief": self._build_news_brief(None, self.data_manager.fetch_trending_news(limit=5), hot_sectors),
+            "cycle_framework": self._derive_cycle_framework(pmi_data, market_info, self.data_manager.fetch_trending_news(limit=5), hot_sectors),
+            "long_term_view": self._derive_long_term_view(
+                news=None,
+                trending=self.data_manager.fetch_trending_news(limit=5),
+                hot_sectors=hot_sectors,
+                macro=pmi_data,
+                market=market_info,
+            ),
+            "short_term_view": self._derive_short_term_view(
+                hot_sectors=hot_sectors,
+                market=market_info,
+                trending=self.data_manager.fetch_trending_news(limit=5),
+            ),
             "macro_mainline": {
                 "cycle_stage": cycle_stage,
                 "narrative": narrative,
@@ -433,6 +701,24 @@ class MacroAnalyzer:
         # We prefer the rule-based one now, so this is just a fail-safe
         return {
             "timestamp": datetime.now().isoformat(),
+            "news_brief": [],
+            "cycle_framework": {
+                "secular": "数据异常，暂无法判断长期主线",
+                "cyclical": "数据异常，暂无法判断中期周期",
+                "tactical": "数据异常，暂停短线执行",
+                "summary": "请先检查数据源和服务状态。",
+            },
+            "long_term_view": {
+                "stance": "暂停判断",
+                "themes": [],
+                "rationale": "当前数据异常，无法给出可靠的长线建议。",
+            },
+            "short_term_view": {
+                "stance": "暂停操作",
+                "focus": [],
+                "rationale": "当前数据异常，无法给出可靠的短线建议。",
+                "risk_trigger": "等待系统恢复后再判断。",
+            },
             "macro_mainline": {
                 "cycle_stage": "数据异常",
                 "narrative": "无法获取宏观数据，请检查网络或API",

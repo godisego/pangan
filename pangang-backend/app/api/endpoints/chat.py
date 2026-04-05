@@ -1,14 +1,11 @@
 from typing import List, Literal, Optional
-import os
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
-from zhipuai import ZhipuAI
-
+from ...core.ai_client import request_chat_completion
+from ...core.ai_provider_registry import get_public_provider_catalog, normalize_provider
 
 router = APIRouter()
-
-DEFAULT_CHAT_MODEL = os.getenv("ZHIPUAI_MODEL", "glm-4.7-flash")
 
 
 class ChatMessage(BaseModel):
@@ -21,40 +18,85 @@ class ChatRequest(BaseModel):
     provider: Optional[str] = "zhipu"
     api_key: Optional[str] = None
     model: Optional[str] = None
+    base_url: Optional[str] = None
+
+
+class ChatTestRequest(BaseModel):
+    provider: Optional[str] = "zhipu"
+    api_key: Optional[str] = None
+    model: Optional[str] = None
+    base_url: Optional[str] = None
+
+
+@router.get("/providers")
+def get_chat_providers():
+    return get_public_provider_catalog()
+
+
+@router.post("/test")
+def test_chat_provider(payload: ChatTestRequest):
+    provider = normalize_provider(payload.provider)
+    if not provider:
+        raise HTTPException(status_code=400, detail=f"Unsupported provider: {payload.provider}")
+
+    try:
+        result = request_chat_completion(
+            provider=provider,
+            api_key=payload.api_key,
+            model=payload.model,
+            base_url=payload.base_url,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "你是 AI 配置验证助手。只回答一句简短确认。",
+                },
+                {
+                    "role": "user",
+                    "content": "请只回复：连接成功",
+                },
+            ],
+            temperature=0.0,
+            timeout=35.0,
+        )
+        return {
+            "status": "success",
+            "reply": result["reply"],
+            "provider": result["provider"],
+            "model": result["model"],
+            "used_api": result["used_api"],
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @router.post("")
 def create_chat_completion(payload: ChatRequest):
-    provider = (payload.provider or "zhipu").lower()
-    if provider not in {"zhipu", ""}:
-        raise HTTPException(status_code=400, detail=f"Unsupported provider: {provider}")
-
-    api_key = payload.api_key or os.getenv("ZHIPUAI_API_KEY")
-    if not api_key:
-        raise HTTPException(status_code=400, detail="Missing API key for Zhipu AI")
-
     if not payload.messages:
         raise HTTPException(status_code=400, detail="Messages cannot be empty")
-
-    model = payload.model or DEFAULT_CHAT_MODEL
-    client = ZhipuAI(api_key=api_key)
 
     try:
         messages_payload = [
             message.model_dump() if hasattr(message, "model_dump") else message.dict()
             for message in payload.messages
         ]
-        response = client.chat.completions.create(
-            model=model,
+        result = request_chat_completion(
+            provider=payload.provider,
+            api_key=payload.api_key,
+            model=payload.model,
+            base_url=payload.base_url,
             messages=messages_payload,
             temperature=0.3,
+            timeout=45.0,
         )
-        content = response.choices[0].message.content if response.choices else ""
         return {
-            "reply": content,
-            "provider": "zhipu",
-            "model": model,
-            "used_api": True,
+            "reply": result["reply"],
+            "provider": result["provider"],
+            "model": result["model"],
+            "used_api": result["used_api"],
         }
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Zhipu chat failed: {exc}") from exc
+        raise HTTPException(status_code=502, detail=str(exc)) from exc

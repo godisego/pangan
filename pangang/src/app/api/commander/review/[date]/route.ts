@@ -5,5 +5,5 @@ export async function GET(
   context: { params: Promise<{ date: string }> }
 ) {
   const { date } = await context.params;
-  return proxyBackendJson(`/api/commander/review/${date}`, 5000);
+  return proxyBackendJson(`/api/commander/review/${date}`, 12000);
 }

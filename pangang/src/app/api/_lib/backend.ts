@@ -5,7 +5,7 @@ const BACKEND_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL ||
   'http://127.0.0.1:8000';
 
-export async function proxyBackendJson(path: string, timeoutMs = 4000) {
+export async function proxyBackendJson(path: string, timeoutMs = 10000) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 

@@ -10,6 +10,8 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
+from ..core.state_store import state_store
+
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "channels": {
@@ -33,6 +35,7 @@ class NotificationService:
     def __init__(self):
         self.config_file = Path("config.json")
         self.config = deepcopy(DEFAULT_CONFIG)
+        self.store = state_store
         self._load_env_defaults()
         self.load_config()
 
@@ -49,11 +52,17 @@ class NotificationService:
 
     def load_config(self):
         try:
+            db_config = self.store.get_json("system_config", "notification_config")
+            if isinstance(db_config, dict):
+                self.config["channels"].update(db_config.get("channels", {}))
+                self.config["schedule"].update(db_config.get("schedule", {}))
+                return
             if not self.config_file.exists():
                 return
             data = json.loads(self.config_file.read_text())
             self.config["channels"].update(data.get("channels", {}))
             self.config["schedule"].update(data.get("schedule", {}))
+            self.store.set_json("system_config", "notification_config", self.config)
         except Exception as exc:
             print(f"Error loading notification config: {exc}")
 
@@ -63,6 +72,7 @@ class NotificationService:
                 self.config["channels"].update(payload["channels"])
             if payload.get("schedule"):
                 self.config["schedule"].update(payload["schedule"])
+            self.store.set_json("system_config", "notification_config", self.config)
             self.config_file.write_text(json.dumps(self.config, ensure_ascii=False, indent=2))
             return True
         except Exception as exc:

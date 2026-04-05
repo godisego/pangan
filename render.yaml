@@ -1,0 +1,34 @@
+services:
+  - type: web
+    name: pangang-api
+    runtime: python
+    rootDir: pangang-backend
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: FRONTEND_URL
+        sync: false
+      - key: ENABLE_DAILY_SCHEDULER
+        value: "false"
+      - key: DAILY_PUSH_TIME
+        value: "08:00"
+      - key: DAILY_PUSH_TIMEZONE
+        value: "Asia/Shanghai"
+      - key: DAILY_REPORT_TRIGGER_SECRET
+        sync: false
+      - key: TUSHARE_TOKEN
+        sync: false
+      - key: ZHIPUAI_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: DASHSCOPE_API_KEY
+        sync: false
+      - key: MINIMAX_API_KEY
+        sync: false
