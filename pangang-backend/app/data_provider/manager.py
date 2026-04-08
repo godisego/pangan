@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import logging
+import os
 from datetime import datetime
 from typing import List, Dict, Type, Optional, Any
 from functools import lru_cache
@@ -65,7 +66,7 @@ class DataFetcherManager:
              "stale": True,
              "timestamp": 0
         }
-        self._stats_cache_file = Path("runtime/market_stats_snapshot.json")
+        self._stats_cache_file = Path(__file__).resolve().parent.parent / "data" / "runtime" / "market_stats_snapshot.json"
         self._market_cache = {"data": None, "timestamp": 0}
         self._market_cache_ttl = 20
         self._hot_sector_cache = {"data": [], "timestamp": 0}
@@ -91,7 +92,7 @@ class DataFetcherManager:
             ],
             validator=self._validate_market_stats,
         )
-        self._start_background_scheduler()
+        self._background_scheduler_started = False
 
     def _get_fetcher(self, cls: Type[BaseFetcher]) -> Optional[BaseFetcher]:
         return next((f for f in self._fetchers if isinstance(f, cls)), None)
@@ -257,6 +258,16 @@ class DataFetcherManager:
 
     def _save_persistent_snapshot(self, key: str, value):
         self._store.set_json("market_snapshots", key, value)
+
+    def start_background_scheduler(self, force: bool = False) -> bool:
+        if self._background_scheduler_started:
+            return False
+        if not force and os.getenv("ENABLE_MARKET_STATS_SCHEDULER", "false").lower() != "true":
+            logger.info("Market stats background scheduler disabled by config")
+            return False
+        self._background_scheduler_started = True
+        self._start_background_scheduler()
+        return True
 
     def _start_background_scheduler(self):
         """Start a background thread to update heavy market stats"""

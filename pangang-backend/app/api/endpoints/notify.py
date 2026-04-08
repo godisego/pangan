@@ -97,13 +97,22 @@ def build_daily_report_message() -> Dict[str, str]:
     if not market:
         return {"error": "Failed to fetch market data"}
 
-    order = battle_commander.generate_battle_order(force_refresh=True)
-    context = order.get("context", {})
-    weather = order.get("battle_weather", {})
-    review = order.get("yesterday_review", {})
-    mainlines = order.get("today_mainlines", {})
-    stock_pool = order.get("elite_stock_pool", {})
-    commander = order.get("commander_tips", {})
+    summary = battle_commander.generate_commander_summary()
+    context = {
+        "market_clock": summary.get("timestamp", "")[:16].replace("T", " ") or "09:25",
+        "label": summary.get("phase_label", "开盘作战"),
+        "action_now": summary.get("action_now", "等待下一步指令"),
+    }
+    weather = summary.get("weather", {})
+    review = summary.get("review", {})
+    mainlines = summary.get("mainlines", {})
+    stock_pool = summary.get("recommended_stocks", {})
+    commander = {
+        "position_text": summary.get("position_text", "观望"),
+        "risk_flags": [],
+        "time_orders": [],
+        "focus": summary.get("focus", ""),
+    }
 
     market_clock = context.get("market_clock", "09:25")
     phase_label = context.get("label", "开盘作战")

@@ -419,6 +419,14 @@ export interface CommanderReview {
   }>;
 }
 
+export interface CommanderDirectionLeg {
+  label: string;
+  direction: 'bullish' | 'bearish' | 'neutral' | string;
+  rationale: string;
+  themes?: string[];
+  beneficiary_type?: 'direct' | 'second_order' | 'hedge' | 'defensive' | string;
+}
+
 export interface CommanderLogic {
   name: string;
   reason: string;
@@ -427,6 +435,10 @@ export interface CommanderLogic {
   fake_signal: string;
   type?: string;
   us_mapping?: string;
+  origin_event?: string;
+  transmission?: string[];
+  beneficiary_type?: 'direct' | 'second_order' | 'hedge' | 'defensive' | string;
+  direction?: 'bullish' | 'bearish' | 'neutral' | string;
 }
 
 export interface CommanderNewsItem {
@@ -455,6 +467,12 @@ export interface CommanderNewsAnalysis {
   impact_factors: string[];
   event_path?: string[];
   watch_points?: string[];
+  event_driver?: string;
+  transmission_chain?: string[];
+  transmission_summary?: string;
+  direction_map?: CommanderDirectionLeg[];
+  falsifiers?: string[];
+  contrarian_angle?: string;
   topic_clusters?: Array<{
     name: string;
     count: number;
@@ -487,6 +505,8 @@ export interface CommanderTradeFilter {
   guidance: string;
   risk_level?: 'low' | 'medium' | 'high' | string;
   evidence?: string[];
+  transmission_summary?: string;
+  falsifiers?: string[];
 }
 
 export interface CommanderStrategicView {
@@ -495,6 +515,11 @@ export interface CommanderStrategicView {
   focus?: string[];
   rationale: string;
   risk_trigger?: string;
+  direction?: 'bullish' | 'bearish' | 'neutral' | string;
+  target_assets_or_themes?: string[];
+  transmission_summary?: string;
+  falsification?: string;
+  contrarian_note?: string;
 }
 
 export interface CommanderStock {
@@ -510,6 +535,9 @@ export interface CommanderStock {
   execution_note?: string;
   risk_note?: string;
   score?: number;
+  beneficiary_type?: 'direct' | 'second_order' | 'hedge' | 'defensive' | string;
+  related_event?: string;
+  falsification?: string;
 }
 
 export interface CommanderLearningItem {
@@ -753,6 +781,49 @@ export interface NotificationResponse {
   success: boolean;
   message: string;
   timestamp?: string;
+}
+
+export interface NotificationConfigPayload {
+  channels: {
+    feishu_webhook: string;
+    wecom_webhook: string;
+    telegram_bot_token: string;
+    telegram_chat_id: string;
+    telegram_api_base: string;
+    telegram_proxy_url: string;
+  };
+  schedule: {
+    enabled: boolean;
+    daily_time: string;
+    timezone: string;
+  };
+}
+
+export interface NotificationChannelResult {
+  message?: string;
+  ok?: boolean;
+  errcode?: number;
+  StatusCode?: number;
+  code?: number;
+}
+
+export interface NotificationBroadcastResponse {
+  status?: string;
+  sent?: number;
+  total?: number;
+  results?: Record<string, NotificationChannelResult>;
+}
+
+export interface NotificationTestPayload {
+  title: string;
+  content: string;
+  channels?: string[];
+  config?: NotificationConfigPayload['channels'];
+}
+
+export interface NotificationDailyReportPayload {
+  channels?: string[];
+  config?: NotificationConfigPayload['channels'];
 }
 
 // ============================================

@@ -21,6 +21,10 @@ import type {
   ChatProviderTestResponse,
   NotificationRequest,
   NotificationResponse,
+  NotificationConfigPayload,
+  NotificationBroadcastResponse,
+  NotificationTestPayload,
+  NotificationDailyReportPayload,
   HealthCheck,
   FetchOptions,
   CommanderOrder,
@@ -28,16 +32,13 @@ import type {
   CommanderHistoryRecord,
   CommanderReviewDetail
 } from '../types/api';
+import { resolveBackendBaseUrl } from '../utils/constants';
 
 // ============================================
 // Configuration
 // ============================================
 
-const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_URL ||
-  (typeof window !== 'undefined'
-    ? `${window.location.protocol}//${window.location.hostname}:8000`
-    : 'http://127.0.0.1:8000');
+const API_BASE_URL = resolveBackendBaseUrl();
 const DEFAULT_TIMEOUT = 10000; // 10 seconds
 const DEFAULT_RETRIES = 2;
 
@@ -166,7 +167,7 @@ async function fetchApi<T>(
   throw lastError || new ApiError('Unknown error occurred');
 }
 
-async function fetchSameOriginApi<T>(
+export async function fetchSameOriginApi<T>(
   endpoint: string,
   options: FetchOptions = {}
 ): Promise<T> {
@@ -195,8 +196,19 @@ async function fetchSameOriginApi<T>(
       });
 
       if (!response.ok) {
+        let errorMessage = `API Error: ${response.statusText}`;
+        try {
+          const errorPayload = await response.json();
+          if (errorPayload?.detail) {
+            errorMessage = String(errorPayload.detail);
+          } else if (errorPayload?.message) {
+            errorMessage = String(errorPayload.message);
+          }
+        } catch {
+          // ignore json parse errors for non-json error bodies
+        }
         throw new ApiError(
-          `API Error: ${response.statusText}`,
+          errorMessage,
           response.status,
           endpoint
         );
@@ -206,15 +218,6 @@ async function fetchSameOriginApi<T>(
       return data as T;
     } catch (error) {
       lastError = error as Error;
-
-      // Local Next.js proxy can be flaky in dev; fall back to direct backend.
-      if (attempt === retries) {
-        try {
-          return await fetchApi<T>(endpoint, { timeout, retries: 0, method, body, headers });
-        } catch (fallbackError) {
-          lastError = fallbackError as Error;
-        }
-      }
 
       if (error instanceof ApiError && error.statusCode && error.statusCode >= 400 && error.statusCode < 500) {
         throw error;
@@ -392,9 +395,31 @@ export const notifyApi = {
    * Send notification
    */
   send: (data: NotificationRequest): Promise<NotificationResponse> =>
-    fetchApi<NotificationResponse>('/api/notify/send', {
+    fetchSameOriginApi<NotificationResponse>('/api/notify/send', {
       method: 'POST',
-      body: data
+      body: data,
+      retries: 0,
+    }),
+
+  saveConfig: (data: NotificationConfigPayload): Promise<{ status: string; config?: unknown }> =>
+    fetchSameOriginApi<{ status: string; config?: unknown }>('/api/notify/config', {
+      method: 'POST',
+      body: data,
+      retries: 0,
+    }),
+
+  test: (data: NotificationTestPayload): Promise<NotificationBroadcastResponse> =>
+    fetchSameOriginApi<NotificationBroadcastResponse>('/api/notify/test', {
+      method: 'POST',
+      body: data,
+      retries: 0,
+    }),
+
+  sendDailyReport: (data: NotificationDailyReportPayload): Promise<NotificationBroadcastResponse> =>
+    fetchSameOriginApi<NotificationBroadcastResponse>('/api/notify/daily_report', {
+      method: 'POST',
+      body: data,
+      retries: 0,
     })
 };
 

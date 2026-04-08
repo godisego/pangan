@@ -1,16 +1,12 @@
 import { NextResponse } from 'next/server';
-
-const BACKEND_BASE_URL =
-  process.env.BACKEND_API_URL ||
-  process.env.NEXT_PUBLIC_API_URL ||
-  'http://127.0.0.1:8000';
+import { resolveBackendBaseUrl } from '@/utils/constants';
 
 export async function proxyBackendJson(path: string, timeoutMs = 10000) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const response = await fetch(`${BACKEND_BASE_URL}${path}`, {
+    const response = await fetch(`${resolveBackendBaseUrl()}${path}`, {
       signal: controller.signal,
       cache: 'no-store',
     });

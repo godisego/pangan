@@ -508,7 +508,7 @@ export default function BtcDetailPage() {
     >
       <ModuleShell
         code="01"
-        eyebrow="Spot & Posture"
+        eyebrow="现货与姿态"
         title="先看价格、情绪和当前动作"
         summary={postureText}
         badge={data.recommendation.overall}
@@ -517,14 +517,14 @@ export default function BtcDetailPage() {
       >
         {loading ? (
           <div className="module-node">
-            <div className="module-node__label">Status</div>
+            <div className="module-node__label">当前状态</div>
             <div className="module-node__title">正在载入 BTC 详情...</div>
             <div className="module-node__copy">会先展示快照，再后台刷新结构和策略。</div>
           </div>
         ) : (
           <div className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
             <div className="module-node">
-              <div className="module-node__label">Live Price</div>
+              <div className="module-node__label">实时价格</div>
               <div className="mt-3 text-3xl font-semibold tracking-[-0.05em] text-[var(--text-primary)]">
                 {data.unavailable || data.price <= 0 ? '--' : `$${formatNumber(data.price)}`}
               </div>
@@ -562,7 +562,7 @@ export default function BtcDetailPage() {
 
       <ModuleShell
         code="02"
-        eyebrow="Structure"
+        eyebrow="结构"
         title="再看关键位和 K 线结构"
         badge={klineInterval}
         variant="strategy"

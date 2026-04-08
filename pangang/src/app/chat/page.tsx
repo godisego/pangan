@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
+import AppShell from '@/components/AppShell';
 import { chatApi, commanderApi } from '@/lib/api';
 import { getProviderById, getProviderLabel } from '@/lib/aiProviders';
 import { defaultSettings, loadUserSettings, type UserSettings } from '@/lib/localSettings';
@@ -28,13 +29,6 @@ const QUICK_PROMPTS = [
   { label: '看今天', prompt: '结合当前作战上下文，先给我一句结论：今天更偏进攻还是防守？然后给出理由、验证点和证伪点。' },
   { label: 'AI 选股', prompt: '结合当前主线、市场过滤器和推荐股票池，给我 3 只今天最值得跟踪的股票，并分别说清楚原因、买点关注项和风险。' },
   { label: '盯趋势', prompt: '如果我今天只做一件事，你建议我重点盯什么趋势？请按“先看什么，再看什么，什么信号出现就行动”的格式回答。' },
-];
-
-const navLinks = [
-  { href: '/', label: '总览' },
-  { href: '/commander', label: '作战' },
-  { href: '/review', label: '复盘' },
-  { href: '/settings', label: '设置' },
 ];
 
 function formatTimeLabel(date = new Date()) {
@@ -156,6 +150,51 @@ function saveChatSessions(sessions: ChatSession[]) {
   }
 
   window.localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(sortSessions(sessions)));
+}
+
+function ContextSummary({
+  summary,
+  usingSharedAi,
+  refreshing,
+  onRefresh,
+}: {
+  summary: CommanderSummary;
+  usingSharedAi: boolean;
+  refreshing: boolean;
+  onRefresh: () => void;
+}) {
+  const leadEvent = summary.news_analysis?.lead_event || summary.news_analysis?.headline;
+
+  return (
+    <div className="border-b border-[var(--border-color)] bg-[rgba(255,255,255,0.02)] px-4 py-3 text-sm text-[var(--text-secondary)] md:px-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 flex-1 space-y-2">
+          <div className="flex flex-wrap items-center gap-2 text-xs text-[var(--text-muted)]">
+            <span>阶段 {summary.factor_engine?.stage || summary.phase_label || '待确认'}</span>
+            <span>·</span>
+            <span>{summary.trade_filter?.state || '仅观察'}</span>
+            {usingSharedAi ? (
+              <>
+                <span>·</span>
+                <span className="text-[var(--accent-green)]">平台共享 AI</span>
+              </>
+            ) : null}
+          </div>
+          <div className="text-sm leading-7 text-[var(--text-secondary)]">
+            {(summary.action_now || '先观察')}
+            {leadEvent ? `，主事件：${leadEvent}` : ''}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <span className="module-badge">A {summary.mainlines.logic_a?.name || '无'}</span>
+            <span className="module-badge">B {summary.mainlines.logic_b?.name || '无'}</span>
+          </div>
+        </div>
+        <button type="button" onClick={onRefresh} className="btn btn-secondary px-3 py-2 text-xs">
+          {refreshing ? '刷新中...' : '刷新上下文'}
+        </button>
+      </div>
+    </div>
+  );
 }
 
 function buildContextPrompt(summary?: CommanderSummary | null) {
@@ -408,72 +447,58 @@ export default function ChatPage() {
   };
 
   return (
-    <div className="min-h-screen bg-[var(--bg-primary)] text-[var(--text-primary)]">
-      <div className="flex min-h-screen">
-        <aside className="hidden w-[300px] shrink-0 border-r border-[var(--border-color)] bg-[rgba(5,14,21,0.9)] xl:flex xl:flex-col">
-          <div className="border-b border-[var(--border-color)] px-5 py-5">
-            <Link href="/" className="flex items-center gap-3">
-              <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-[rgba(255,255,255,0.06)] font-mono text-sm font-semibold">
-                PG
-              </span>
+    <AppShell
+      title="对话"
+      subtitle="直接继续聊今天的判断、理由、验证点和证伪点。"
+      badge={aiReady ? `${providerLabel} · 已连接` : '待配置'}
+      maxWidthClassName="max-w-7xl"
+      contentClassName="space-y-4"
+      actions={(
+        <button type="button" onClick={createAndSelectSession} className="btn btn-primary px-4 py-2 text-sm">
+          新对话
+        </button>
+      )}
+    >
+      <div className="grid gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">
+        <aside className="hidden lg:block">
+          <div className="module-node h-full">
+            <div className="flex items-center justify-between gap-3">
               <div>
-                <div className="text-sm font-semibold text-[var(--text-primary)]">盘感 AI</div>
-                <div className="mt-1 text-xs text-[var(--text-secondary)]">Chat Workspace</div>
+                <div className="module-node__label">历史对话</div>
+                <div className="module-node__title">最近会话</div>
               </div>
-            </Link>
-          </div>
-
-          <div className="border-b border-[var(--border-color)] px-4 py-4">
-            <button type="button" onClick={createAndSelectSession} className="btn btn-primary w-full px-4 py-3 text-sm">
-              新对话
-            </button>
-          </div>
-
-          <nav className="border-b border-[var(--border-color)] px-3 py-3">
-            <div className="grid gap-1">
-              {navLinks.map((link) => (
-                <Link
-                  key={link.href}
-                  href={link.href}
-                  className="rounded-2xl px-3 py-2 text-sm text-[var(--text-secondary)] transition hover:bg-[rgba(255,255,255,0.04)] hover:text-[var(--text-primary)]"
+              <button type="button" onClick={createAndSelectSession} className="btn btn-secondary px-3 py-2 text-xs">
+                新建
+              </button>
+            </div>
+            <div className="mt-4 space-y-2">
+              {sessions.map((session) => (
+                <button
+                  key={session.id}
+                  type="button"
+                  onClick={() => setCurrentSessionId(session.id)}
+                  className={`w-full rounded-[20px] px-4 py-3 text-left transition ${
+                    session.id === currentSessionId
+                      ? 'bg-[rgba(255,255,255,0.06)] text-[var(--text-primary)]'
+                      : 'text-[var(--text-secondary)] hover:bg-[rgba(255,255,255,0.035)] hover:text-[var(--text-primary)]'
+                  }`}
                 >
-                  {link.label}
-                </Link>
+                  <div className="truncate text-sm font-medium">{session.title}</div>
+                  <div className="mt-1 text-xs text-[var(--text-muted)]">{formatSessionDate(session.updatedAt)}</div>
+                </button>
               ))}
             </div>
-          </nav>
-
-          <div className="px-5 pt-4 text-xs uppercase tracking-[0.18em] text-[var(--text-muted)]">
-            历史对话
-          </div>
-
-          <div className="flex-1 space-y-2 overflow-y-auto px-3 py-3">
-            {sessions.map((session) => (
-              <button
-                key={session.id}
-                type="button"
-                onClick={() => setCurrentSessionId(session.id)}
-                className={`w-full rounded-[20px] px-4 py-3 text-left transition ${
-                  session.id === currentSessionId
-                    ? 'bg-[rgba(255,255,255,0.06)] text-[var(--text-primary)]'
-                    : 'text-[var(--text-secondary)] hover:bg-[rgba(255,255,255,0.035)] hover:text-[var(--text-primary)]'
-                }`}
-              >
-                <div className="truncate text-sm font-medium">{session.title}</div>
-                <div className="mt-1 text-xs text-[var(--text-muted)]">{formatSessionDate(session.updatedAt)}</div>
-              </button>
-            ))}
           </div>
         </aside>
 
-        <section className="flex min-w-0 flex-1 flex-col">
-          <header className="border-b border-[var(--border-color)] bg-[rgba(6,16,24,0.92)] px-4 py-3 backdrop-blur-xl md:px-6">
+        <section className="min-w-0 rounded-[28px] border border-[var(--border-color)] bg-[rgba(8,18,28,0.9)] shadow-[0_16px_48px_rgba(0,0,0,0.22)]">
+          <div className="border-b border-[var(--border-color)] px-4 py-3 md:px-5">
             <div className="flex items-center justify-between gap-3">
               <div className="flex min-w-0 items-center gap-2">
                 <button
                   type="button"
                   onClick={() => setIsHistoryOpen(true)}
-                  className="btn btn-secondary px-3 py-2 text-xs xl:hidden"
+                  className="btn btn-secondary px-3 py-2 text-xs lg:hidden"
                 >
                   历史
                 </button>
@@ -482,11 +507,7 @@ export default function ChatPage() {
                     {currentSession?.title || '新对话'}
                   </div>
                   <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-[var(--text-muted)]">
-                    <span>{providerLabel}</span>
-                    <span>·</span>
-                    <span>{activeModel || '未设置模型'}</span>
-                    <span>·</span>
-                    <span>{aiReady ? '已连接' : '待配置'}</span>
+                    <span>{aiReady ? '当前可直接使用' : '需要先配置 AI'}</span>
                     {sharedAi?.enabled && !hasLocalAiKey ? (
                       <>
                         <span>·</span>
@@ -497,82 +518,64 @@ export default function ChatPage() {
                 </div>
               </div>
 
-              <div className="flex items-center gap-2">
-                <button type="button" onClick={createAndSelectSession} className="btn btn-secondary px-3 py-2 text-xs">
-                  新对话
-                </button>
-                <Link href="/settings" className="btn btn-secondary px-3 py-2 text-xs">
-                  设置
-                </Link>
-              </div>
+              <button type="button" onClick={createAndSelectSession} className="btn btn-secondary px-3 py-2 text-xs">
+                新对话
+              </button>
             </div>
-          </header>
+          </div>
 
           {!aiReady ? (
-            <div className="border-b border-[rgba(246,199,125,0.16)] bg-[rgba(246,199,125,0.08)] px-4 py-3 text-sm text-[var(--text-secondary)] md:px-6">
+            <div className="border-b border-[rgba(246,199,125,0.16)] bg-[rgba(246,199,125,0.08)] px-4 py-3 text-sm text-[var(--text-secondary)] md:px-5">
               当前未配置可用的 AI 能力。先去
               <Link href="/settings" className="mx-1 text-[var(--accent-gold)] underline decoration-transparent transition hover:decoration-inherit">
                 设置页
               </Link>
-              配置个人 Key，或在服务端启用共享 AI，再回来开始真实对话。
+              配置个人 Key，或在服务端启用共享 AI。
             </div>
           ) : null}
 
           {briefingContext ? (
-            <div className="border-b border-[var(--border-color)] bg-[rgba(255,255,255,0.02)] px-4 py-3 text-sm text-[var(--text-secondary)] md:px-6">
-              <div className="mx-auto flex w-full max-w-4xl flex-wrap items-center gap-2">
-                <span className="module-badge">阶段 {briefingContext.factor_engine?.stage || briefingContext.phase_label || '待确认'}</span>
-                <span className="module-badge">{briefingContext.trade_filter?.state || '仅观察'}</span>
-                <span className="module-badge">A {briefingContext.mainlines.logic_a?.name || '无'}</span>
-                <span className="module-badge">B {briefingContext.mainlines.logic_b?.name || '无'}</span>
-                {(briefingContext.news_analysis?.lead_event || briefingContext.news_analysis?.headline) ? (
-                  <span className="text-xs text-[var(--text-muted)]">
-                    主事件：{briefingContext.news_analysis?.lead_event || briefingContext.news_analysis?.headline}
-                  </span>
-                ) : null}
-                {sharedAi?.enabled && !hasLocalAiKey ? (
-                  <span className="text-xs text-[var(--accent-green)]">当前使用平台共享 AI</span>
-                ) : null}
-                <button
-                  type="button"
-                  onClick={async () => {
-                    try {
-                      setContextRefreshing(true);
-                      const summary = await commanderApi.getSummary();
-                      setBriefingContext(summary);
-                    } finally {
-                      setContextRefreshing(false);
-                    }
-                  }}
-                  className="btn btn-secondary ml-auto px-3 py-2 text-xs"
-                >
-                  {contextRefreshing ? '刷新上下文中...' : '刷新上下文'}
-                </button>
-              </div>
-            </div>
+            <ContextSummary
+              summary={briefingContext}
+              usingSharedAi={Boolean(sharedAi?.enabled && !hasLocalAiKey)}
+              refreshing={contextRefreshing}
+              onRefresh={() => {
+                void (async () => {
+                  try {
+                    setContextRefreshing(true);
+                    const summary = await commanderApi.getSummary();
+                    setBriefingContext(summary);
+                  } finally {
+                    setContextRefreshing(false);
+                  }
+                })();
+              }}
+            />
           ) : null}
 
-          <div className="flex min-h-0 flex-1 flex-col">
-            <div className="flex-1 overflow-y-auto px-4 py-6 md:px-6">
-              <div className="mx-auto flex w-full max-w-4xl flex-col gap-6">
+          <div className="flex min-h-[60vh] flex-col md:min-h-[65vh]">
+            <div className="flex-1 overflow-y-auto px-4 py-5 md:px-5">
+              <div className="flex w-full flex-col gap-6">
                 {!isReady || !currentSession ? (
                   <div className="flex min-h-[48vh] items-center justify-center text-sm text-[var(--text-secondary)]">
                     正在准备对话...
                   </div>
                 ) : (
                   <>
-                    <div className="flex flex-wrap gap-2">
-                      {QUICK_PROMPTS.map((item) => (
-                        <button
-                          key={item.label}
-                          type="button"
-                          onClick={() => void handleSend(item.prompt)}
-                          className="btn btn-secondary px-3 py-2 text-xs"
-                        >
-                          {item.label}
-                        </button>
-                      ))}
-                    </div>
+                    {messages.length <= 1 ? (
+                      <div className="flex flex-wrap gap-2">
+                        {QUICK_PROMPTS.map((item) => (
+                          <button
+                            key={item.label}
+                            type="button"
+                            onClick={() => void handleSend(item.prompt)}
+                            className="btn btn-secondary px-3 py-2 text-xs"
+                          >
+                            {item.label}
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
                     {messages.map((message) => (
                       <MessageBubble key={message.id} message={message} />
                     ))}
@@ -594,14 +597,14 @@ export default function ChatPage() {
               </div>
             </div>
 
-            <div className="px-4 pb-4 pt-3 md:px-6 md:pb-6">
-              <div className="mx-auto w-full max-w-4xl rounded-[28px] border border-[var(--border-color)] bg-[rgba(8,18,28,0.9)] p-3 shadow-[0_16px_48px_rgba(0,0,0,0.22)]">
+            <div className="border-t border-[var(--border-color)] px-4 pb-4 pt-3 md:px-5 md:pb-5">
+              <div className="w-full rounded-[24px] border border-[var(--border-color)] bg-[rgba(255,255,255,0.02)] p-3">
                 <textarea
                   ref={textareaRef}
                   value={input}
                   onChange={(event) => setInput(event.target.value)}
                   onKeyDown={handleKeyPress}
-                  placeholder={aiReady ? '问主线、问个股、问证伪点，或直接点上面的快捷问题' : '先去设置页配置个人 Key，或启用平台共享 AI'}
+                  placeholder={aiReady ? '直接输入你的问题，回车发送' : '先去设置页配置个人 Key，或启用平台共享 AI'}
                   className="min-h-[120px] w-full resize-none bg-transparent px-2 py-2 text-sm leading-7 text-[var(--text-primary)] outline-none placeholder:text-[var(--text-muted)]"
                   rows={5}
                 />
@@ -622,7 +625,7 @@ export default function ChatPage() {
       </div>
 
       {isHistoryOpen ? (
-        <div className="fixed inset-0 z-[70] bg-[rgba(1,7,12,0.76)] backdrop-blur-sm xl:hidden">
+        <div className="fixed inset-0 z-[70] bg-[rgba(1,7,12,0.76)] backdrop-blur-sm lg:hidden">
           <div className="flex h-full w-[86%] max-w-[320px] flex-col border-r border-[var(--border-color)] bg-[rgba(5,14,21,0.98)]">
             <div className="flex items-center justify-between border-b border-[var(--border-color)] px-4 py-4">
               <div>
@@ -663,7 +666,7 @@ export default function ChatPage() {
           </div>
         </div>
       ) : null}
-    </div>
+    </AppShell>
   );
 }
 

@@ -160,6 +160,7 @@ class StockService:
             "net": round(north_flow, 2),
             "status": "inflow" if north_flow > 0 else "outflow" if north_flow < 0 else "neutral",
             "focus": "北向资金" if north_flow else "",
+            "available": bool(north_flow),
         }
 
         if stats_source == "TushareFetcher":
@@ -185,6 +186,7 @@ class StockService:
                 "net": round(float(capital_flow.get("net", 0) or 0), 2),
                 "status": str(capital_flow.get("status", "neutral") or "neutral"),
                 "focus": str(capital_flow.get("focus", "") or ""),
+                "available": bool(capital_flow.get("available", False) or capital_flow.get("focus") or abs(float(capital_flow.get("net", 0) or 0)) >= 0.01),
             },
             "breadth": breadth,
             "up_count": int(data.get("up_count", 0) or 0),

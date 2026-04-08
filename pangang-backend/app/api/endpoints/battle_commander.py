@@ -115,20 +115,7 @@ async def get_review_by_date(date: str):
 async def get_today_mainlines():
     """仅获取今日两条主线 (第三部分)"""
     try:
-        from app.data_provider.manager import DataFetcherManager
-        manager = DataFetcherManager()
-        hot_sectors = manager.fetch_hot_sectors()
-
-        # 简化版主线判断
-        logic_a = {"name": "无", "reason": "无量价齐升板块"}
-        if hot_sectors:
-            strong = [s for s in hot_sectors if s.get('catalystLevel') in ['strong', 'medium']][:1]
-            if strong:
-                logic_a = {
-                    "name": strong[0].get('name', ''),
-                    "reason": f"量价齐升·涨幅{strong[0].get('change', 0):.1f}%"
-                }
-
-        return {"status": "success", "data": {"logic_a": logic_a}}
+        summary = battle_commander.generate_commander_summary()
+        return {"status": "success", "data": summary.get("mainlines", {})}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

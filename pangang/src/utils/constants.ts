@@ -3,8 +3,26 @@
 // ============================================
 
 // API Configuration
+const DEFAULT_BACKEND_BASE_URL = 'http://127.0.0.1:8000';
+
+function resolveBrowserBackendBaseUrl() {
+  if (typeof window === 'undefined') {
+    return DEFAULT_BACKEND_BASE_URL;
+  }
+
+  return `${window.location.protocol}//${window.location.hostname}:8000`;
+}
+
+export function resolveBackendBaseUrl() {
+  if (typeof window === 'undefined') {
+    return process.env.BACKEND_API_URL || process.env.NEXT_PUBLIC_API_URL || DEFAULT_BACKEND_BASE_URL;
+  }
+
+  return process.env.NEXT_PUBLIC_API_URL || resolveBrowserBackendBaseUrl();
+}
+
 export const API_CONFIG = {
-  BASE_URL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000',
+  BASE_URL: resolveBackendBaseUrl(),
   DEFAULT_TIMEOUT: 10000,
   DEFAULT_RETRIES: 2,
   LONG_POLLING_TIMEOUT: 60000

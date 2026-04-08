@@ -16,6 +16,7 @@ import type { BtcSummary, CommanderSummary, StockMarket } from '@/types/api';
 
 const MARKET_CACHE_KEY = 'pangang_cache_market_v2';
 const BTC_CACHE_KEY = 'pangang_cache_btc_v2';
+const COMMANDER_SUMMARY_CACHE_KEY = 'pangang_cache_commander_summary_v4';
 
 function readCachedJson<T>(key: string): T | null {
   if (typeof window === 'undefined') return null;
@@ -37,12 +38,10 @@ function writeCachedJson<T>(key: string, value: T) {
 }
 
 function SmallBoard({
-  step,
   title,
   badge,
   children,
 }: {
-  step?: string;
   title: string;
   badge?: string;
   children: React.ReactNode;
@@ -51,7 +50,6 @@ function SmallBoard({
     <section className="module-node">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          {step ? <div className="module-node__label">{step}</div> : null}
           <div className="module-node__title">{title}</div>
         </div>
         {badge ? <div className="module-badge">{badge}</div> : null}
@@ -137,7 +135,7 @@ function MarketEnvironment() {
 
   if (loading) {
     return (
-      <SmallBoard step="A" title="市场能不能做">
+      <SmallBoard title="市场能不能做">
         <div className="text-sm text-[var(--text-secondary)]">正在载入 A 股数据...</div>
       </SmallBoard>
     );
@@ -145,7 +143,7 @@ function MarketEnvironment() {
 
   if (!data) {
     return (
-      <SmallBoard step="A" title="市场能不能做">
+      <SmallBoard title="市场能不能做">
         <div className="text-sm text-[var(--text-secondary)]">A 股数据暂时不可用。</div>
       </SmallBoard>
     );
@@ -153,7 +151,6 @@ function MarketEnvironment() {
 
   return (
     <SmallBoard
-      step="A"
       title="市场能不能做"
       badge={data.statsUnavailable ? '基础快照' : data.canOperate ? '可操作' : '先保守'}
     >
@@ -170,7 +167,7 @@ function MarketEnvironment() {
         <div className="data-tile">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <div className="text-[11px] uppercase tracking-[0.18em] text-[var(--text-muted)]">Index</div>
+              <div className="text-[11px] uppercase tracking-[0.18em] text-[var(--text-muted)]">指数</div>
               <div className="mt-2 text-2xl font-semibold tracking-[-0.04em] text-[var(--text-primary)]">{formatNumber(data.index.value)}</div>
               <div className={`mt-1 text-sm ${data.index.change >= 0 ? 'text-[var(--accent-green)]' : 'text-[var(--accent-red)]'}`}>
                 {data.index.name} {formatPercent(data.index.change)}
@@ -182,17 +179,17 @@ function MarketEnvironment() {
 
         <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-1">
           <div className="data-tile">
-            <div className="text-[11px] uppercase tracking-[0.18em] text-[var(--text-muted)]">Breadth</div>
+            <div className="text-[11px] uppercase tracking-[0.18em] text-[var(--text-muted)]">市场广度</div>
             <div className="mt-2 text-lg font-semibold text-[var(--text-primary)]">{data.statsUnavailable ? '--' : `${data.breadth}%`}</div>
             <div className="mt-1 text-xs text-[var(--text-secondary)]">{data.statsUnavailable ? '统计未就绪' : '红盘率'}</div>
           </div>
           <div className="data-tile">
-            <div className="text-[11px] uppercase tracking-[0.18em] text-[var(--text-muted)]">Limit Up</div>
+            <div className="text-[11px] uppercase tracking-[0.18em] text-[var(--text-muted)]">涨停家数</div>
             <div className="mt-2 text-lg font-semibold text-[var(--text-primary)]">{data.statsUnavailable ? '--' : `${data.limitUp} 家`}</div>
             <div className="mt-1 text-xs text-[var(--text-secondary)]">{data.statsUnavailable ? '统计未就绪' : '封板强度'}</div>
           </div>
           <div className="data-tile">
-            <div className="text-[11px] uppercase tracking-[0.18em] text-[var(--text-muted)]">Capital Flow</div>
+            <div className="text-[11px] uppercase tracking-[0.18em] text-[var(--text-muted)]">资金流向</div>
             <div className={`mt-2 text-lg font-semibold ${(data.capitalFlow?.net ?? data.northFlow) >= 0 ? 'text-[var(--accent-green)]' : 'text-[var(--accent-red)]'}`}>
               {data.statsUnavailable ? '--' : `${(data.capitalFlow?.net ?? data.northFlow) >= 0 ? '+' : ''}${data.capitalFlow?.net ?? data.northFlow} 亿`}
             </div>
@@ -206,7 +203,7 @@ function MarketEnvironment() {
       <div className="mt-4 text-sm leading-7 text-[var(--text-secondary)]">{data.summary || '当前市场摘要暂无补充说明。'}</div>
       {data.statsAsOf ? (
         <div className="mt-2 text-[11px] tracking-[0.14em] text-[var(--text-muted)]">
-          STATS AS OF {data.statsAsOf}
+          统计时间 {data.statsAsOf}
         </div>
       ) : null}
       {error ? <div className="mt-3 text-xs text-orange-300">后台刷新失败，当前保留最近一次成功结果。</div> : null}
@@ -277,7 +274,7 @@ function BtcCard() {
 
   if (loading) {
     return (
-      <SmallBoard step="B" title="BTC 风险偏好">
+      <SmallBoard title="BTC 风险偏好">
         <div className="text-sm text-[var(--text-secondary)]">正在载入 BTC 数据...</div>
       </SmallBoard>
     );
@@ -285,7 +282,7 @@ function BtcCard() {
 
   if (!data) {
     return (
-      <SmallBoard step="B" title="BTC 风险偏好">
+      <SmallBoard title="BTC 风险偏好">
         <div className="text-sm text-[var(--text-secondary)]">BTC 数据暂时不可用。</div>
       </SmallBoard>
     );
@@ -293,7 +290,6 @@ function BtcCard() {
 
   return (
     <SmallBoard
-      step="B"
       title="BTC 风险偏好"
       badge={data.unavailable ? '数据不可用' : data.stale ? '降级快照' : '实时摘要'}
     >
@@ -308,7 +304,7 @@ function BtcCard() {
       </div>
       <div className="grid gap-3 md:grid-cols-3">
         <div className="data-tile">
-          <div className="text-[11px] uppercase tracking-[0.18em] text-[var(--text-muted)]">Price</div>
+          <div className="text-[11px] uppercase tracking-[0.18em] text-[var(--text-muted)]">价格</div>
           <div className="mt-2 text-2xl font-semibold tracking-[-0.04em] text-[var(--text-primary)]">
             {data.unavailable || data.price <= 0 ? '--' : `$${formatNumber(data.price)}`}
           </div>
@@ -317,12 +313,12 @@ function BtcCard() {
           </div>
         </div>
         <div className="data-tile">
-          <div className="text-[11px] uppercase tracking-[0.18em] text-[var(--text-muted)]">Fear & Greed</div>
+          <div className="text-[11px] uppercase tracking-[0.18em] text-[var(--text-muted)]">情绪指数</div>
           <div className="mt-2 text-lg font-semibold text-[var(--text-primary)]">{data.unavailable ? '--' : data.fearGreed}</div>
           <div className="mt-1 text-xs text-[var(--text-secondary)]">{data.unavailable ? '数据未就绪' : data.fearGreedLabel}</div>
         </div>
         <div className="data-tile">
-          <div className="text-[11px] uppercase tracking-[0.18em] text-[var(--text-muted)]">Mode</div>
+          <div className="text-[11px] uppercase tracking-[0.18em] text-[var(--text-muted)]">当前模式</div>
           <div className="mt-2 text-lg font-semibold text-[var(--text-primary)]">{data.unavailable ? '数据不可用' : data.stale ? '降级快照' : '实时摘要'}</div>
           <div className="mt-1 text-xs text-[var(--text-secondary)]">{data.strategy?.summary || '当前暂无策略摘要'}</div>
         </div>
@@ -337,26 +333,28 @@ function BtcCard() {
   );
 }
 
-function TodayNewsModule() {
-  const { data, loading } = useFetch<CommanderSummary>(
-    () => commanderApi.getSummary(),
-    { interval: 60000, cacheKey: 'pangang_cache_commander_summary_v4' }
-  );
+function TodayNewsModule({
+  summary,
+  loading,
+}: {
+  summary?: CommanderSummary | null;
+  loading?: boolean;
+}) {
+  const data = summary;
 
   return (
     <ModuleShell
-      code="02"
-      eyebrow="News Brief"
-      title="先把今天最重要的新闻收入眼底"
-      badge="主新闻 / 次新闻 / 风险项"
+      title="今日重点消息"
+      badge="先看主事件"
       variant="strategy"
       motion="scan"
+      compact
     >
       {loading && !data ? (
         <div className="module-node">
-          <div className="module-node__label">Loading</div>
-          <div className="module-node__title">正在整理新闻简报...</div>
-          <div className="module-node__copy">会先返回主新闻，再补次新闻、风险项和今日看点。</div>
+          <div className="module-node__label">处理中</div>
+          <div className="module-node__title">正在整理重点消息...</div>
+          <div className="module-node__copy">先返回主事件，再补充传导和证伪。</div>
         </div>
       ) : (
         <div className="grid gap-4">
@@ -374,7 +372,7 @@ function TodayNewsModule() {
               ) : null}
             </div>
           ) : null}
-          <NewsBriefBoard analysis={data?.news_analysis} />
+          <NewsBriefBoard analysis={data?.news_analysis} mode="compact" />
         </div>
       )}
     </ModuleShell>
@@ -384,6 +382,10 @@ function TodayNewsModule() {
 export default function Home() {
   const [currentTime, setCurrentTime] = useState('');
   const [showMacro, setShowMacro] = useState(false);
+  const commanderSummary = useFetch<CommanderSummary>(
+    () => commanderApi.getSummary(),
+    { interval: 60000, cacheKey: COMMANDER_SUMMARY_CACHE_KEY }
+  );
 
   useEffect(() => {
     const updateTime = () => {
@@ -398,8 +400,8 @@ export default function Home() {
   return (
     <AppShell
       title="今日总览"
-      subtitle="先看结论，再看证据。"
-      badge="新闻驱动趋势判断"
+      subtitle="先看今天怎么做，再决定要不要继续深读。"
+      badge="个人决策工作台"
       maxWidthClassName="max-w-6xl"
       actions={(
         <div className="metric-chip">
@@ -407,24 +409,34 @@ export default function Home() {
         </div>
       )}
     >
-      <CommanderOverview />
+      <CommanderOverview
+        summary={commanderSummary.data}
+        loading={commanderSummary.loading}
+        error={commanderSummary.error}
+        isRefreshing={commanderSummary.isRefreshing}
+        showEvidence={false}
+        showStockLanes={false}
+        showStrategicViews={false}
+        onRefresh={() => {
+          void commanderSummary.refetch();
+        }}
+      />
 
-      <TodayNewsModule />
+      <TodayNewsModule summary={commanderSummary.data} loading={commanderSummary.loading} />
 
       <ModuleShell
-        code="03"
-        eyebrow="Market Evidence"
-        title="先看市场，再看风险偏好，最后决定要不要深读宏观"
-        badge={showMacro ? '宏观已展开' : '摘要模式'}
+        title="市场参考"
+        badge={showMacro ? '已展开宏观' : '按需展开宏观'}
         variant="evidence"
         motion="scan"
+        compact
         actions={(
           <button
             type="button"
             onClick={() => setShowMacro((prev) => !prev)}
             className={showMacro ? 'btn btn-primary px-4 py-2 text-sm' : 'btn btn-secondary px-4 py-2 text-sm'}
           >
-            {showMacro ? '收起宏观解释' : '展开宏观解释'}
+            {showMacro ? '收起宏观' : '展开宏观'}
           </button>
         )}
       >
@@ -437,12 +449,11 @@ export default function Home() {
 
       {showMacro ? (
         <ModuleShell
-          code="04"
-          eyebrow="Macro AI"
-          title="把今天的新闻放进更大的周期框架里"
-          badge="News + Cycle"
+          title="宏观深读"
+          badge="按需展开"
           variant="macro"
           motion="orbit"
+          compact
           actions={(
             <button type="button" onClick={() => setShowMacro(false)} className="btn btn-secondary px-4 py-2 text-sm">
               收起

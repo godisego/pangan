@@ -33,7 +33,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
 
 class NotificationService:
     def __init__(self):
-        self.config_file = Path("config.json")
+        self.config_file = Path(__file__).resolve().parent.parent / "data" / "config.json"
         self.config = deepcopy(DEFAULT_CONFIG)
         self.store = state_store
         self._load_env_defaults()
@@ -73,6 +73,7 @@ class NotificationService:
             if payload.get("schedule"):
                 self.config["schedule"].update(payload["schedule"])
             self.store.set_json("system_config", "notification_config", self.config)
+            self.config_file.parent.mkdir(parents=True, exist_ok=True)
             self.config_file.write_text(json.dumps(self.config, ensure_ascii=False, indent=2))
             return True
         except Exception as exc:

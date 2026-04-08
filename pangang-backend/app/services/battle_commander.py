@@ -165,7 +165,6 @@ class BattleCommander:
             "summary": {"data": None, "timestamp": 0, "ttl": 60, "max_stale": 3600, "refreshing": False},
         }
         self._load_persisted_snapshots()
-        self._warm_runtime_snapshots()
 
     def generate_battle_order(self, force_refresh: bool = False) -> Dict[str, Any]:
         """生成完整的作战指令"""
@@ -200,6 +199,7 @@ class BattleCommander:
                 market_snapshot=market_snapshot,
                 trending=trending,
                 learning_feedback=learning_feedback,
+                news_analysis=news_analysis,
             )
             trade_filter = self._build_trade_filter(
                 market_snapshot=market_snapshot,
@@ -221,6 +221,7 @@ class BattleCommander:
                 factor_engine=factor_engine,
                 market_snapshot=market_snapshot,
                 learning_feedback=learning_feedback,
+                news_analysis=news_analysis,
             )
             commander = self._generate_commander_section(weather, mainlines, context, trade_filter)
 
@@ -265,32 +266,71 @@ class BattleCommander:
             return self._decorate_snapshot_payload("summary", boot_summary, state="boot")
 
         try:
-            order = self.generate_battle_order(force_refresh=force_refresh)
+            context = self._build_execution_context()
+            market_snapshot = stock_service.get_market_indices() or {}
+            trending = self._get_trending_news()
+            learning_feedback = self.history_tracker.get_learning_feedback(days=12)
+            news_analysis = self._generate_news_brief(trending=trending, market_snapshot=market_snapshot)
+            weather = self._generate_weather_section(market_snapshot=market_snapshot)
+            review = self._generate_review_section(learning_feedback=learning_feedback)
+            hot_sectors = self._get_hot_sectors()
+            factor_engine = self._build_factor_engine(
+                market_snapshot=market_snapshot,
+                hot_sectors=hot_sectors,
+                news_analysis=news_analysis,
+            )
+            mainlines = self._generate_mainline_section(
+                market_snapshot=market_snapshot,
+                trending=trending,
+                learning_feedback=learning_feedback,
+                news_analysis=news_analysis,
+            )
+            trade_filter = self._build_trade_filter(
+                market_snapshot=market_snapshot,
+                hot_sectors=hot_sectors,
+                news_analysis=news_analysis,
+                factor_engine=factor_engine,
+                mainlines=mainlines,
+            )
+            strategic_views = self._build_strategic_views(
+                factor_engine=factor_engine,
+                mainlines=mainlines,
+                news_analysis=news_analysis,
+                trade_filter=trade_filter,
+            )
+            stock_pool = self._generate_stock_pool_section(
+                mainlines,
+                trade_filter=trade_filter,
+                factor_engine=factor_engine,
+                market_snapshot=market_snapshot,
+                learning_feedback=learning_feedback,
+                news_analysis=news_analysis,
+            )
+            commander = self._generate_commander_section(weather, mainlines, context, trade_filter)
             recent_accuracy = self.history_tracker.get_recent_accuracy(days=5)
-            stock_pool = order.get("elite_stock_pool", {})
 
             result = {
-                "timestamp": order.get("timestamp"),
-                "weather": order.get("battle_weather", {}),
-                "review": order.get("yesterday_review", {}),
-                "news_analysis": order.get("news_analysis", {}),
-                "factor_engine": order.get("factor_engine", {}),
-                "trade_filter": order.get("trade_filter", {}),
-                "strategic_views": order.get("strategic_views", {}),
-                "mainlines": order.get("today_mainlines", {}),
-                "current_phase": order.get("context", {}).get("current_phase", ""),
-                "phase_label": order.get("context", {}).get("label", ""),
-                "action_now": order.get("context", {}).get("action_now", ""),
-                "position": order.get("commander_tips", {}).get("position", {}),
-                "position_text": order.get("commander_tips", {}).get("position_text", ""),
-                "focus": order.get("commander_tips", {}).get("focus", ""),
+                "timestamp": datetime.now().isoformat(),
+                "weather": weather,
+                "review": review,
+                "news_analysis": news_analysis,
+                "factor_engine": factor_engine,
+                "trade_filter": trade_filter,
+                "strategic_views": strategic_views,
+                "mainlines": mainlines,
+                "current_phase": context.get("current_phase", ""),
+                "phase_label": context.get("label", ""),
+                "action_now": context.get("action_now", ""),
+                "position": commander.get("position", {}),
+                "position_text": commander.get("position_text", ""),
+                "focus": commander.get("focus", ""),
                 "recommended_stocks": {
                     "attack": stock_pool.get("attack", [])[:5],
                     "defense": stock_pool.get("defense", [])[:5],
                 },
                 "recent_accuracy": recent_accuracy,
                 "recent_records": self.history_tracker.get_recent_records(limit=3),
-                "learning_feedback": order.get("learning_feedback", {}),
+                "learning_feedback": learning_feedback,
             }
             self._set_runtime_snapshot("summary", result)
             return self._decorate_snapshot_payload("summary", result, state="fresh")
@@ -476,24 +516,38 @@ class BattleCommander:
         if cached is not None:
             return cached
 
-        data = self._run_with_timeout(self.data_manager.fetch_hot_sectors, [], timeout=3)
+        stale_cached = self._cache["hot_sectors"]["data"] or []
+        persisted = self.data_manager._load_persistent_snapshot("hot_sectors", []) or []
+        fallback = stale_cached or list(persisted)
+        data = self._run_with_timeout(self.data_manager.fetch_hot_sectors, fallback, timeout=5.0)
         if data:
             self._set_cached("hot_sectors", list(data))
-        return data or []
+            return list(data)
+        if persisted:
+            self._set_cached("hot_sectors", list(persisted))
+            return list(persisted)
+        return []
 
     def _get_trending_news(self) -> List[Dict[str, Any]]:
         cached = self._get_cached("trending")
         if cached is not None:
             return cached
 
+        stale_cached = self._cache["trending"]["data"] or []
+        persisted = self.data_manager._load_persistent_snapshot("trending_news", []) or []
+        fallback = stale_cached or list(persisted)
         data = self._run_with_timeout(
             lambda: self.data_manager.fetch_trending_news(limit=8),
-            [],
-            timeout=3,
+            fallback,
+            timeout=8,
         )
         if data:
             self._set_cached("trending", list(data))
-        return data or []
+            return list(data)
+        if persisted:
+            self._set_cached("trending", list(persisted))
+            return list(persisted)
+        return []
 
     def _build_execution_context(self) -> Dict[str, Any]:
         now = datetime.now()
@@ -808,21 +862,34 @@ class BattleCommander:
         market_snapshot: Optional[Dict[str, Any]] = None,
         trending: Optional[List[Dict[str, Any]]] = None,
         learning_feedback: Optional[Dict[str, Any]] = None,
+        news_analysis: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """第三部分：🦋 今日两条主线"""
         market_snapshot = market_snapshot or stock_service.get_market_indices() or {}
         hot_sectors = self._get_hot_sectors()
         trending = trending if trending is not None else self._get_trending_news()
+        news_analysis = news_analysis or self._generate_news_brief(trending=trending, market_snapshot=market_snapshot)
         news_hits = self._collect_news_hits(trending)
 
         attack_sector, attack_theme = self._pick_attack_candidate(hot_sectors, news_hits, learning_feedback=learning_feedback)
-        logic_a = self._build_attack_logic(attack_sector, attack_theme, news_hits, learning_feedback=learning_feedback)
-        logic_b = self._build_defense_logic(market_snapshot, learning_feedback=learning_feedback)
+        logic_a = self._build_attack_logic(
+            attack_sector,
+            attack_theme,
+            news_hits,
+            learning_feedback=learning_feedback,
+            news_analysis=news_analysis,
+        )
+        logic_b = self._build_defense_logic(
+            market_snapshot,
+            learning_feedback=learning_feedback,
+            news_analysis=news_analysis,
+        )
+        event_driver = news_analysis.get("event_driver") or news_analysis.get("lead_event") or logic_a.get("name", "")
 
         return {
             "logic_a": {**logic_a, "type": "进攻"},
             "logic_b": {**logic_b, "type": "防守/捡漏"},
-            "summary": f"进攻{logic_a['name']} + 防守{logic_b['name']}",
+            "summary": f"事件 {event_driver}；进攻看 {logic_a['name']}，防守看 {logic_b['name']}",
         }
 
     def _collect_news_hits(self, trending: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
@@ -1008,6 +1075,193 @@ class BattleCommander:
             path.append(f"风险项：{risk_news[0].get('title', '')[:18]}")
         return path
 
+    def _infer_event_archetype(self, title: str) -> str:
+        if any(keyword in title for keyword in ["战争", "战火", "冲突", "袭击", "制裁", "地缘", "中东", "伊朗"]):
+            return "geopolitical_conflict"
+        if any(keyword in title for keyword in ["原油", "油价", "天然气", "供给", "减产", "停产", "断供"]):
+            return "supply_shock"
+        if any(keyword in title for keyword in ["通胀", "CPI", "PPI", "涨价", "成本抬升"]):
+            return "inflation"
+        if any(keyword in title for keyword in ["航运", "港口", "海运", "物流", "运价", "航道", "红海"]):
+            return "shipping_disruption"
+        if any(keyword in title for keyword in ["降息", "加息", "流动性", "货币", "央行", "社融", "MLF", "降准"]):
+            return "liquidity_shift"
+        if any(keyword in title for keyword in ["政策", "规划", "试点", "补贴", "监管", "发改委", "工信部"]):
+            return "policy_catalyst"
+        return "theme_rotation"
+
+    def _derive_event_setup(
+        self,
+        primary: List[Dict[str, Any]],
+        risk_news: List[Dict[str, Any]],
+        lead_theme: Optional[str],
+        market_snapshot: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        lead_title = (primary[0].get("title", "") if primary else "") or "当前暂无足够强的主事件"
+        archetype = self._infer_event_archetype(lead_title)
+        capital_flow = market_snapshot.get("capitalFlow") or {}
+        capital_focus = capital_flow.get("focus", "")
+        breadth = int(market_snapshot.get("breadth", 50) or 50)
+
+        direction_map: List[Dict[str, Any]] = []
+        transmission_chain: List[str] = []
+        falsifiers: List[str] = []
+        contrarian_angle = ""
+        event_driver = lead_title
+
+        if archetype == "geopolitical_conflict":
+            event_driver = f"地缘冲突升温：{lead_title[:28]}"
+            transmission_chain = [
+                "地缘风险升温，先冲击风险偏好与大宗商品定价。",
+                "原油、军工、航运等一阶受益方向先被资金识别。",
+                "成本抬升与避险情绪会压制消费、制造等风险资产追价。",
+                "若油气/军工只是情绪脉冲而没有板块扩散，则只能观察不能追。",
+            ]
+            direction_map = [
+                {"label": "石油行业", "direction": "bullish", "rationale": "供给与风险溢价最先映射到油气定价。", "themes": ["石油行业"], "beneficiary_type": "direct"},
+                {"label": "军工", "direction": "bullish", "rationale": "地缘风险上升时，军工更容易成为直观受益方向。", "themes": ["军工"], "beneficiary_type": "direct"},
+                {"label": "高股息", "direction": "bullish", "rationale": "若风险偏好下降，资金往往回流低波动防守资产。", "themes": ["高股息"], "beneficiary_type": "defensive"},
+                {"label": "消费/制造", "direction": "bearish", "rationale": "成本和风险偏好双重压力下，更容易承压。", "themes": ["消费"], "beneficiary_type": "hedge"},
+            ]
+            falsifiers = [
+                "油价和军工只高开不扩散，午后快速回落。",
+                "风险新闻没有继续发酵，反而市场广度明显修复。",
+                "资金没有流向油气/军工/防守，而是重新回到成长主线。",
+            ]
+            contrarian_angle = "如果冲突只停留在标题层面、没有扩散到油价和板块强度，最容易出现借地缘消息做高开兑现。"
+        elif archetype == "supply_shock":
+            event_driver = f"供给冲击：{lead_title[:28]}"
+            transmission_chain = [
+                "供给端收缩先推升上游价格预期。",
+                "资源品、能源链和替代供给方向先受益。",
+                "中下游利润空间被压缩，追高需防成本传导不及预期。",
+                "只有价格、板块、龙头同步确认，才算可交易主线。",
+            ]
+            direction_map = [
+                {"label": "石油行业", "direction": "bullish", "rationale": "供给收缩最直接映射到能源价格与油气资产。", "themes": ["石油行业"], "beneficiary_type": "direct"},
+                {"label": "电力行业", "direction": "bullish", "rationale": "能源涨价阶段，公用事业与替代供给方向容易获得防守性资金。", "themes": ["电力行业"], "beneficiary_type": "second_order"},
+                {"label": "消费", "direction": "bearish", "rationale": "成本抬升会挤压中下游与可选消费。", "themes": ["消费"], "beneficiary_type": "hedge"},
+            ]
+            falsifiers = [
+                "商品价格没有继续上行，资源股同步走弱。",
+                "供给冲击很快被证伪，只剩单条新闻热度。",
+                "市场资金并未承认上游逻辑，主线回到其他成长题材。",
+            ]
+            contrarian_angle = "很多供给冲击最后只剩情绪溢价，若上游价格没继续走强，反而容易成为追涨陷阱。"
+        elif archetype == "inflation":
+            event_driver = f"通胀预期升温：{lead_title[:28]}"
+            transmission_chain = [
+                "通胀预期先影响利率与估值框架。",
+                "资源、能源、必选消费和现金流稳定资产更抗压。",
+                "高估值成长与成本敏感行业更容易被压缩估值。",
+                "若市场没有同步交易通胀链，说明叙事尚未形成可执行主线。",
+            ]
+            direction_map = [
+                {"label": "石油行业", "direction": "bullish", "rationale": "通胀链里资源和能源更容易先受益。", "themes": ["石油行业"], "beneficiary_type": "direct"},
+                {"label": "高股息", "direction": "bullish", "rationale": "现金流稳定的防守资产在通胀环境下容错更高。", "themes": ["高股息"], "beneficiary_type": "defensive"},
+                {"label": "高估值成长", "direction": "bearish", "rationale": "估值对利率更敏感，容易被压制。", "themes": [lead_theme] if lead_theme else [], "beneficiary_type": "hedge"},
+            ]
+            falsifiers = [
+                "通胀数据没有继续超预期，利率压力回落。",
+                "资源与防守方向没有得到资金承接。",
+                "成长方向重新成为资金主线。",
+            ]
+            contrarian_angle = "若市场嘴上交易通胀、资金却继续追高成长，说明这更像噪音而非真正 regime 切换。"
+        elif archetype == "shipping_disruption":
+            event_driver = f"航运/物流扰动：{lead_title[:28]}"
+            transmission_chain = [
+                "物流受阻先抬升运价与交付不确定性。",
+                "航运、港口、能源运输链容易先受关注。",
+                "依赖进口原料或全球交付的制造链承压。",
+                "若运价和相关板块没有联动，更多只是事件噪音。",
+            ]
+            direction_map = [
+                {"label": "航运链", "direction": "bullish", "rationale": "运价与供给约束会先映射到运输链。", "themes": [], "beneficiary_type": "direct"},
+                {"label": "石油行业", "direction": "bullish", "rationale": "物流扰动常伴随能源运输风险溢价。", "themes": ["石油行业"], "beneficiary_type": "second_order"},
+                {"label": "出口制造", "direction": "bearish", "rationale": "交付周期和成本压力更容易伤害制造链。", "themes": [], "beneficiary_type": "hedge"},
+            ]
+            falsifiers = [
+                "运价没有上行，航运链冲高回落。",
+                "扰动很快缓解，事件持续性不足。",
+                "市场没有形成运输-能源-防守的传导链。",
+            ]
+            contrarian_angle = "物流扰动经常先被情绪夸大，若运价与成交额不跟，就不要把标题党当成趋势。"
+        elif archetype == "liquidity_shift":
+            event_driver = f"流动性变化：{lead_title[:28]}"
+            transmission_chain = [
+                "流动性变化先影响风险偏好和估值扩张能力。",
+                "宽松更利好高弹性成长，收紧则偏向防守和现金流资产。",
+                "板块扩散与资金净流入决定这条逻辑是否能交易。",
+                "若只有宏观表态没有市场确认，先把它当框架，不急着执行。",
+            ]
+            growth_direction = "bullish" if any(keyword in lead_title for keyword in ["降息", "降准", "宽松", "呵护", "投放"]) else "bearish"
+            defense_direction = "bearish" if growth_direction == "bullish" else "bullish"
+            direction_map = [
+                {"label": lead_theme or "成长主线", "direction": growth_direction, "rationale": "流动性宽松时高弹性方向更容易获得估值修复，收紧则相反。", "themes": [lead_theme] if lead_theme else [], "beneficiary_type": "direct"},
+                {"label": "高股息", "direction": defense_direction, "rationale": "流动性收紧时防守资产容错更高；宽松时相对吸引力下降。", "themes": ["高股息"], "beneficiary_type": "defensive"},
+            ]
+            falsifiers = [
+                "资金净流入没有改善，市场广度也未修复。",
+                "宽松预期只体现在消息，没有传导到主线板块。",
+                "成长和防守都没有形成清晰强弱分化。",
+            ]
+            contrarian_angle = "真正的流动性交易看的是市场承接，不是口头表态本身。"
+        elif archetype == "policy_catalyst":
+            mapped_theme = lead_theme or "政策受益方向"
+            event_driver = f"政策催化：{lead_title[:28]}"
+            transmission_chain = [
+                "政策先改变预期，再寻找最直接受益行业。",
+                f"一阶映射通常是 {mapped_theme} 等政策受益链。",
+                "随后要看板块中军、龙头和资金是否同步确认。",
+                "若只有消息没有扩散，说明政策强度还不足以形成主线。",
+            ]
+            direction_map = [
+                {"label": mapped_theme, "direction": "bullish", "rationale": "政策预期最先映射到直接受益产业链。", "themes": [mapped_theme], "beneficiary_type": "direct"},
+                {"label": "低位补涨", "direction": "bullish", "rationale": "若政策主线扩散，低位补涨方向会成为二阶受益。", "themes": ["低位补涨"], "beneficiary_type": "second_order"},
+                {"label": "非受益旧主线", "direction": "neutral", "rationale": "若资金切换到新政策主线，旧主线会被边际抽血。", "themes": [], "beneficiary_type": "hedge"},
+            ]
+            falsifiers = [
+                "政策发布后，板块没有放量、龙头没有持续强化。",
+                "只出现一字前排，没有中军和补涨跟随。",
+                "资金净流入转弱，说明只是情绪脉冲。",
+            ]
+            contrarian_angle = "政策题最常见的坑是只有前排情绪，没有中军扩散；看不到梯队就别把它当真主线。"
+        else:
+            mapped_theme = lead_theme or "等待确认主题"
+            event_driver = f"主题发酵：{lead_title[:28]}"
+            transmission_chain = [
+                "新闻热度先形成主题预期。",
+                f"市场尝试把事件映射到 {mapped_theme}。",
+                "接下来要观察板块扩散、龙头承接和资金净流入。",
+                "若传导只停留在标题和高开，先观察不执行。",
+            ]
+            direction_map = [
+                {"label": mapped_theme, "direction": "bullish", "rationale": "当前最可能承接事件热度的方向。", "themes": [mapped_theme], "beneficiary_type": "direct"},
+                {"label": "高股息", "direction": "neutral", "rationale": "若主线确认不足，防守方向仍是备选。", "themes": ["高股息"], "beneficiary_type": "defensive"},
+            ]
+            falsifiers = [
+                "主线只剩标题热度，没有板块和资金确认。",
+                "龙头冲高回落，中军和补涨不跟。",
+                "市场广度持续走弱。",
+            ]
+            contrarian_angle = "大多数热点死在没有传导链，先盯扩散和承接，而不是盯新闻标题本身。"
+
+        if capital_focus:
+            transmission_chain.append(f"资金侧当前优先观察 {capital_focus} 是否与这条链路同向。")
+        if breadth < 50:
+            falsifiers.append("市场红盘率过低，说明再强的事件也可能被系统性风险压制。")
+
+        return {
+            "event_driver": event_driver,
+            "lead_theme": lead_theme,
+            "archetype": archetype,
+            "transmission_chain": transmission_chain,
+            "direction_map": direction_map,
+            "falsifiers": falsifiers,
+            "contrarian_angle": contrarian_angle,
+            "transmission_summary": transmission_chain[1] if len(transmission_chain) > 1 else (transmission_chain[0] if transmission_chain else ""),
+        }
+
     def _generate_news_brief(
         self,
         trending: List[Dict[str, Any]],
@@ -1128,6 +1382,7 @@ class BattleCommander:
 
         market_implication = self._build_market_implication(primary, risk_news, market_snapshot, lead_theme)
         event_path = self._build_event_path(primary, risk_news, lead_theme, market_snapshot)
+        event_setup = self._derive_event_setup(primary, risk_news, lead_theme, market_snapshot)
 
         return {
             "summary": summary,
@@ -1141,6 +1396,57 @@ class BattleCommander:
             "event_path": event_path,
             "watch_points": watch_points,
             "topic_clusters": topic_clusters,
+            **event_setup,
+        }
+
+    def _sanitize_hot_sector_metrics(self, hot_sectors: List[Dict[str, Any]]) -> Dict[str, Any]:
+        valid_items: List[Dict[str, Any]] = []
+        for item in hot_sectors[:8]:
+            try:
+                change = float(item.get("change", 0) or 0)
+            except Exception:
+                change = 0.0
+            try:
+                lead_change = float(item.get("leadChange", 0) or 0)
+            except Exception:
+                lead_change = 0.0
+
+            if abs(change) > 20:
+                continue
+            if abs(lead_change) > 35:
+                lead_change = 0.0
+
+            normalized = dict(item)
+            normalized["change"] = change
+            normalized["leadChange"] = lead_change
+            valid_items.append(normalized)
+
+        strong_sectors = len([
+            item
+            for item in valid_items
+            if item.get("catalystLevel") in ("strong", "medium")
+            or float(item.get("change", 0) or 0) >= 1.2
+            or float(item.get("leadChange", 0) or 0) >= 5.5
+        ])
+        watch_sectors = len([
+            item
+            for item in valid_items
+            if item.get("catalystLevel") == "weak"
+            or float(item.get("change", 0) or 0) >= 0.6
+            or float(item.get("leadChange", 0) or 0) >= 3.5
+        ])
+        top_sector_change = max([float(item.get("change", 0) or 0) for item in valid_items[:5]] or [0.0])
+        lead_change = max([float(item.get("leadChange", 0) or 0) for item in valid_items[:5]] or [0.0])
+        sector_changes = [float(item.get("change", 0) or 0) for item in valid_items[:5]]
+        sector_avg = round(sum(sector_changes) / len(sector_changes), 1) if sector_changes else 0.0
+
+        return {
+            "strong_sectors": strong_sectors,
+            "watch_sectors": watch_sectors,
+            "top_sector_change": top_sector_change,
+            "lead_change": lead_change,
+            "sector_avg": sector_avg,
+            "has_valid_data": bool(valid_items),
         }
 
     def _build_factor_engine(
@@ -1154,17 +1460,21 @@ class BattleCommander:
         limit_down = int(market_snapshot.get("limitDown", 0) or 0)
         capital_flow = market_snapshot.get("capitalFlow") or {}
         capital_net = float(capital_flow.get("net", 0) or 0)
+        capital_available = bool(capital_flow.get("available"))
+        capital_focus = str(capital_flow.get("focus", "") or "")
         primary_news_count = len(news_analysis.get("primary_news", []) or [])
         risk_news_count = len(news_analysis.get("risk_news", []) or [])
-        strong_sectors = len([item for item in hot_sectors[:8] if item.get("catalystLevel") in ("strong", "medium")])
-        top_sector_change = max([float(item.get("change", 0) or 0) for item in hot_sectors[:5]] or [0.0])
-        lead_change = max([float(item.get("leadChange", 0) or 0) for item in hot_sectors[:5]] or [0.0])
-        sector_changes = [float(item.get("change", 0) or 0) for item in hot_sectors[:5]]
-        sector_avg = round(sum(sector_changes) / len(sector_changes), 1) if sector_changes else 0.0
+        hot_metrics = self._sanitize_hot_sector_metrics(hot_sectors)
+        strong_sectors = int(hot_metrics.get("strong_sectors", 0) or 0)
+        watch_sectors = int(hot_metrics.get("watch_sectors", 0) or 0)
+        top_sector_change = float(hot_metrics.get("top_sector_change", 0.0) or 0.0)
+        lead_change = float(hot_metrics.get("lead_change", 0.0) or 0.0)
+        sector_avg = float(hot_metrics.get("sector_avg", 0.0) or 0.0)
+        has_valid_hot_data = bool(hot_metrics.get("has_valid_data"))
         event_strength = round(max(0.0, min(100.0, 38 + primary_news_count * 12 - risk_news_count * 8 + min(len(news_analysis.get("secondary_news", []) or []), 3) * 4)), 1)
-        diffusion_score = round(max(0.0, min(100.0, 35 + strong_sectors * 12 + top_sector_change * 5 + breadth * 0.15)), 1)
+        diffusion_score = round(max(0.0, min(100.0, 35 + strong_sectors * 10 + watch_sectors * 4 + top_sector_change * 5 + breadth * 0.15)), 1)
         consistency_score = round(max(0.0, min(100.0, 45 + (lead_change - max(sector_avg, 0)) * 6 - abs(limit_down - max(limit_up, 1)) * 0.3)), 1)
-        confirmation_score = round(max(0.0, min(100.0, 42 + capital_net * 2.1 + breadth * 0.35 - limit_down * 0.8)), 1)
+        confirmation_score = round(max(0.0, min(100.0, 42 + (capital_net * 2.1 if capital_available else 0) + breadth * 0.35 - limit_down * 0.8)), 1)
         risk_pressure = round(max(0.0, min(100.0, 28 + risk_news_count * 18 + max(limit_down - 4, 0) * 2.5 + max(50 - breadth, 0) * 0.9)), 1)
 
         macro_score = 58
@@ -1176,14 +1486,39 @@ class BattleCommander:
         news_score = 45 + primary_news_count * 8 - risk_news_count * 6
         micro_score = 35 + (breadth - 50) * 1.2 + min(limit_up, 80) * 0.35 - min(limit_down, 30) * 0.8
         behavior_score = 35 + strong_sectors * 8 + top_sector_change * 4 + lead_change * 0.8
-        capital_score = 45 + capital_net * 1.5
+        capital_score = 45 + (capital_net * 1.5 if capital_available else 0)
+        capital_detail = (
+            f"{capital_focus or '暂无显著偏好'} / 净流入{capital_net:+.1f}亿"
+            if capital_available
+            else "资金流代理暂不可用"
+        )
+        hot_sector_detail = (
+            f"强势板块{strong_sectors}个 / 观察板块{watch_sectors}个 / 龙头最高{lead_change:+.1f}%"
+            if has_valid_hot_data
+            else "热点板块数据暂未确认"
+        )
+        diffusion_value = (
+            f"强势{strong_sectors} / 观察{watch_sectors} / 均涨 {sector_avg:+.1f}%"
+            if has_valid_hot_data
+            else "热点板块数据暂未确认"
+        )
+        consistency_value = (
+            f"龙头 {lead_change:+.1f}% / 板块 {top_sector_change:+.1f}%"
+            if has_valid_hot_data
+            else "等待板块联动数据"
+        )
+        confirmation_value = (
+            f"{capital_focus or '暂无方向'} / {capital_net:+.1f} 亿"
+            if capital_available
+            else "资金流代理暂不可用"
+        )
 
         factors = [
             {"name": "宏观因子", "score": max(0, min(100, round(macro_score, 1))), "detail": market_snapshot.get("summary", "市场环境中性。")},
             {"name": "新闻因子", "score": max(0, min(100, round(news_score, 1))), "detail": news_analysis.get("summary", "新闻影响中性。")},
             {"name": "微观结构因子", "score": max(0, min(100, round(micro_score, 1))), "detail": f"红盘率{breadth}% / 涨停{limit_up} / 跌停{limit_down}"},
-            {"name": "行为金融因子", "score": max(0, min(100, round(behavior_score, 1))), "detail": f"强势板块{strong_sectors}个 / 龙头最高{lead_change:+.1f}%"},
-            {"name": "资金因子", "score": max(0, min(100, round(capital_score, 1))), "detail": f"{capital_flow.get('focus', '暂无显著偏好')} / 净流入{capital_net:+.1f}亿"},
+            {"name": "行为金融因子", "score": max(0, min(100, round(behavior_score, 1))), "detail": hot_sector_detail},
+            {"name": "资金因子", "score": max(0, min(100, round(capital_score, 1))), "detail": capital_detail},
         ]
         signals = [
             {
@@ -1193,18 +1528,18 @@ class BattleCommander:
             },
             {
                 "name": "板块扩散",
-                "value": f"{strong_sectors} 强势板块 / 均涨 {sector_avg:+.1f}%",
-                "verdict": "扩散中" if diffusion_score >= 60 else "扩散不足",
+                "value": diffusion_value,
+                "verdict": "扩散中" if has_valid_hot_data and diffusion_score >= 60 else "扩散不足" if has_valid_hot_data else "待确认",
             },
             {
                 "name": "主线一致性",
-                "value": f"龙头 {lead_change:+.1f}% / 板块 {top_sector_change:+.1f}%",
-                "verdict": "一致" if consistency_score >= 58 else "容易分歧",
+                "value": consistency_value,
+                "verdict": "一致" if has_valid_hot_data and consistency_score >= 58 else "容易分歧" if has_valid_hot_data else "待确认",
             },
             {
                 "name": "资金确认",
-                "value": f"{capital_flow.get('focus', '暂无方向')} / {capital_net:+.1f} 亿",
-                "verdict": "已确认" if confirmation_score >= 58 else "未确认",
+                "value": confirmation_value,
+                "verdict": "已确认" if capital_available and confirmation_score >= 58 else "未确认" if capital_available else "待确认",
             },
             {
                 "name": "风险压力",
@@ -1248,21 +1583,37 @@ class BattleCommander:
         breadth = int(market_snapshot.get("breadth", 50) or 50)
         limit_up = int(market_snapshot.get("limitUp", 0) or 0)
         limit_down = int(market_snapshot.get("limitDown", 0) or 0)
+        stats_unavailable = bool(market_snapshot.get("statsUnavailable"))
+        stats_source = str(market_snapshot.get("statsSource", "") or "")
         capital_flow = market_snapshot.get("capitalFlow") or {}
         capital_net = float(capital_flow.get("net", 0) or 0)
+        capital_available = bool(capital_flow.get("available"))
         primary_news_count = len(news_analysis.get("primary_news", []) or [])
         risk_news_count = len(news_analysis.get("risk_news", []) or [])
-        strong_sectors = len([item for item in hot_sectors[:8] if item.get("catalystLevel") in ("strong", "medium")])
-        top_sector_change = max([float(item.get("change", 0) or 0) for item in hot_sectors[:5]] or [0.0])
-        lead_change = max([float(item.get("leadChange", 0) or 0) for item in hot_sectors[:5]] or [0.0])
+        hot_metrics = self._sanitize_hot_sector_metrics(hot_sectors)
+        strong_sectors = int(hot_metrics.get("strong_sectors", 0) or 0)
+        watch_sectors = int(hot_metrics.get("watch_sectors", 0) or 0)
+        top_sector_change = float(hot_metrics.get("top_sector_change", 0.0) or 0.0)
+        lead_change = float(hot_metrics.get("lead_change", 0.0) or 0.0)
+        has_valid_hot_data = bool(hot_metrics.get("has_valid_data"))
         stage = factor_engine.get("stage", "回暖")
         attack_name = (mainlines.get("logic_a") or {}).get("name", "主线")
+        hot_sector_evidence = (
+            f"板块最高涨幅 {top_sector_change:+.1f}% / 龙头 {lead_change:+.1f}%"
+            if has_valid_hot_data
+            else "热点板块联动暂未确认"
+        )
+        capital_evidence = (
+            f"市场广度 {breadth}% / 资金净流入 {capital_net:+.1f} 亿"
+            if capital_available
+            else f"市场广度 {breadth}% / 资金流代理暂不可用"
+        )
 
         if (
             stage == "高潮"
             and (risk_news_count >= 1 or lead_change >= 8 or top_sector_change >= 4.5)
-            and (breadth < 58 or capital_net <= 0 or limit_down >= 6)
-        ) or (risk_news_count >= 2 and (breadth < 52 or capital_net < 0)):
+            and (breadth < 58 or (capital_available and capital_net <= 0) or limit_down >= 6)
+        ) or (risk_news_count >= 2 and (breadth < 52 or (capital_available and capital_net < 0))):
             return {
                 "state": "拉高出货",
                 "reason": "消息热度很高，但扩散、承接和资金确认不足，更像借利好拉升后的兑现窗口。",
@@ -1270,32 +1621,40 @@ class BattleCommander:
                 "risk_level": "high",
                 "evidence": [
                     f"阶段处于 {stage}，风险新闻 {risk_news_count} 条",
-                    f"板块最高涨幅 {top_sector_change:+.1f}% / 龙头 {lead_change:+.1f}%",
-                    f"市场广度 {breadth}% / 资金净流入 {capital_net:+.1f} 亿",
+                    hot_sector_evidence,
+                    capital_evidence,
                 ],
+                "transmission_summary": news_analysis.get("transmission_summary", ""),
+                "falsifiers": list(news_analysis.get("falsifiers") or []),
             }
 
         if (
             stage in ("回暖", "主升")
             and primary_news_count >= 1
-            and strong_sectors >= 1
-            and top_sector_change >= 1.5
-            and lead_change >= 4
-            and breadth >= 52
-            and limit_up >= 15
-            and limit_down <= 8
-            and capital_net >= -3
+            and (strong_sectors >= 1 or (watch_sectors >= 2 and top_sector_change >= 0.8))
+            and top_sector_change >= 0.8
+            and lead_change >= 3.5
+            and breadth >= 50
+            and (stats_unavailable or limit_up >= 10)
+            and (stats_unavailable or limit_down <= 10)
+            and (capital_net >= -3 if capital_available else True)
         ):
+            stats_note = "市场统计当前来自降级/快照路径，涨跌停阈值已放宽" if stats_unavailable or stats_source == "local_snapshot" else None
+            evidence = [
+                f"主新闻 {primary_news_count} 条，强势板块 {strong_sectors} 个，观察板块 {watch_sectors} 个",
+                hot_sector_evidence,
+                f"市场广度 {breadth}% / 涨停 {limit_up} / 跌停 {limit_down}",
+            ]
+            if stats_note:
+                evidence.append(stats_note)
             return {
                 "state": "真启动",
-                "reason": "主新闻、板块强度、龙头表现和市场广度形成正反馈，资金没有明显背离。",
-                "guidance": f"优先围绕 {attack_name} 做龙头和中军，不必把精力分散到太多弱支线。",
-                "risk_level": "low" if stage == "主升" else "medium",
-                "evidence": [
-                    f"主新闻 {primary_news_count} 条，强势板块 {strong_sectors} 个",
-                    f"板块最高涨幅 {top_sector_change:+.1f}% / 龙头 {lead_change:+.1f}%",
-                    f"市场广度 {breadth}% / 涨停 {limit_up} / 跌停 {limit_down}",
-                ],
+                "reason": "主新闻已经点火，板块和龙头出现联动；即使统计源降级，当前盘面也具备先跟主线再动态验证的条件。",
+                "guidance": f"优先围绕 {attack_name} 做龙头和中军，若午后扩散断档再收缩到观察仓。",
+                "risk_level": "low" if stage == "主升" and not stats_unavailable else "medium",
+                "evidence": evidence,
+                "transmission_summary": news_analysis.get("transmission_summary", ""),
+                "falsifiers": list(news_analysis.get("falsifiers") or []),
             }
 
         return {
@@ -1304,10 +1663,21 @@ class BattleCommander:
             "guidance": f"先观察 {attack_name} 是否出现龙头-中军-补涨梯队，再决定是否执行股票池。",
             "risk_level": "medium",
             "evidence": [
-                f"主新闻 {primary_news_count} 条，但强势板块 {strong_sectors} 个",
-                f"板块最高涨幅 {top_sector_change:+.1f}% / 龙头 {lead_change:+.1f}%",
-                f"市场广度 {breadth}% / 资金净流入 {capital_net:+.1f} 亿",
+                (
+                    f"主新闻 {primary_news_count} 条，但强势板块 {strong_sectors} 个，观察板块 {watch_sectors} 个"
+                    if has_valid_hot_data
+                    else f"主新闻 {primary_news_count} 条，但热点板块联动暂未确认"
+                ),
+                hot_sector_evidence,
+                capital_evidence,
+                (
+                    f"市场统计当前走降级路径（{stats_source or 'snapshot'}），需把盘中确认权重放在龙头和板块联动上"
+                    if stats_unavailable or stats_source == "local_snapshot"
+                    else ""
+                ),
             ],
+            "transmission_summary": news_analysis.get("transmission_summary", ""),
+            "falsifiers": list(news_analysis.get("falsifiers") or []),
         }
 
     def _build_strategic_views(
@@ -1333,6 +1703,11 @@ class BattleCommander:
             "stance": "沿产业趋势布局" if stage in ("回暖", "主升") else "只保留中长期看得懂的方向",
             "themes": long_term_themes,
             "rationale": "长线优先看政策、产业链位置和持续性，不因为单日涨跌改变方向判断。",
+            "direction": (mainlines.get("logic_a") or {}).get("direction") or "bullish",
+            "target_assets_or_themes": long_term_themes,
+            "transmission_summary": news_analysis.get("transmission_summary", ""),
+            "falsification": next(iter(news_analysis.get("falsifiers") or []), ""),
+            "contrarian_note": news_analysis.get("contrarian_angle", ""),
         }
 
         if trade_state == "拉高出货":
@@ -1341,6 +1716,11 @@ class BattleCommander:
                 "focus": short_term_focus,
                 "rationale": "今天更像借消息拉高后的兑现窗口，重点是减少高位接力和跟风冲动。",
                 "risk_trigger": trade_filter.get("guidance", "若前排冲高回落、资金背离，就停止追击。"),
+                "direction": (mainlines.get("logic_b") or {}).get("direction") or "neutral",
+                "target_assets_or_themes": short_term_focus,
+                "transmission_summary": trade_filter.get("transmission_summary") or news_analysis.get("transmission_summary", ""),
+                "falsification": next(iter(trade_filter.get("falsifiers") or news_analysis.get("falsifiers") or []), ""),
+                "contrarian_note": news_analysis.get("contrarian_angle", ""),
             }
         elif trade_state == "真启动":
             short_term = {
@@ -1348,6 +1728,11 @@ class BattleCommander:
                 "focus": short_term_focus,
                 "rationale": "新闻、板块、资金和情绪形成合力，允许围绕龙头、中军、补涨分层执行。",
                 "risk_trigger": "若前排持续走强但中军失真，或午后出现大面积炸板，则收缩仓位。",
+                "direction": (mainlines.get("logic_a") or {}).get("direction") or "bullish",
+                "target_assets_or_themes": short_term_focus,
+                "transmission_summary": trade_filter.get("transmission_summary") or news_analysis.get("transmission_summary", ""),
+                "falsification": next(iter(trade_filter.get("falsifiers") or news_analysis.get("falsifiers") or []), ""),
+                "contrarian_note": news_analysis.get("contrarian_angle", ""),
             }
         elif stage == "冰点":
             short_term = {
@@ -1355,6 +1740,11 @@ class BattleCommander:
                 "focus": short_term_focus,
                 "rationale": "更多观察主线是否真能从新闻传导到板块和个股，不急着扩仓。",
                 "risk_trigger": "若主线高开低走、龙头炸板、中军不跟，则视为借消息出货。",
+                "direction": (mainlines.get("logic_b") or {}).get("direction") or "neutral",
+                "target_assets_or_themes": short_term_focus,
+                "transmission_summary": trade_filter.get("transmission_summary") or news_analysis.get("transmission_summary", ""),
+                "falsification": next(iter(trade_filter.get("falsifiers") or news_analysis.get("falsifiers") or []), ""),
+                "contrarian_note": news_analysis.get("contrarian_angle", ""),
             }
         elif stage == "回暖":
             short_term = {
@@ -1362,6 +1752,11 @@ class BattleCommander:
                 "focus": short_term_focus,
                 "rationale": "新闻开始形成主线，但还需要竞价、量能和承接的二次确认。",
                 "risk_trigger": "若前排强、中军弱，或者只有消息没有成交，立即降级为观察。",
+                "direction": (mainlines.get("logic_a") or {}).get("direction") or "bullish",
+                "target_assets_or_themes": short_term_focus,
+                "transmission_summary": trade_filter.get("transmission_summary") or news_analysis.get("transmission_summary", ""),
+                "falsification": next(iter(trade_filter.get("falsifiers") or news_analysis.get("falsifiers") or []), ""),
+                "contrarian_note": news_analysis.get("contrarian_angle", ""),
             }
         elif stage == "主升":
             short_term = {
@@ -1369,6 +1764,11 @@ class BattleCommander:
                 "focus": short_term_focus,
                 "rationale": "主线、资金、行为因子共振时，允许扩到龙头、中军、补涨的分层执行。",
                 "risk_trigger": "若分歧无法回封，或高位股开始连续炸板，则收缩仓位。",
+                "direction": (mainlines.get("logic_a") or {}).get("direction") or "bullish",
+                "target_assets_or_themes": short_term_focus,
+                "transmission_summary": trade_filter.get("transmission_summary") or news_analysis.get("transmission_summary", ""),
+                "falsification": next(iter(trade_filter.get("falsifiers") or news_analysis.get("falsifiers") or []), ""),
+                "contrarian_note": news_analysis.get("contrarian_angle", ""),
             }
         else:
             short_term = {
@@ -1376,6 +1776,11 @@ class BattleCommander:
                 "focus": short_term_focus,
                 "rationale": "高潮阶段最容易出现借新闻拉高出货，今天更重要的是去弱留强。",
                 "risk_trigger": "若午后冲高回落、量能失真、风险新闻增多，优先兑现。",
+                "direction": (mainlines.get("logic_b") or {}).get("direction") or "neutral",
+                "target_assets_or_themes": short_term_focus,
+                "transmission_summary": trade_filter.get("transmission_summary") or news_analysis.get("transmission_summary", ""),
+                "falsification": next(iter(trade_filter.get("falsifiers") or news_analysis.get("falsifiers") or []), ""),
+                "contrarian_note": news_analysis.get("contrarian_angle", ""),
             }
 
         return {
@@ -1454,7 +1859,15 @@ class BattleCommander:
         theme: Optional[str],
         news_hits: Dict[str, Dict[str, Any]],
         learning_feedback: Optional[Dict[str, Any]] = None,
+        news_analysis: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        news_analysis = news_analysis or {}
+        event_driver = news_analysis.get("event_driver") or news_analysis.get("lead_event") or "当前主事件"
+        transmission = list(news_analysis.get("transmission_chain") or [])
+        direction_map = news_analysis.get("direction_map") or []
+        direct_direction = next((item for item in direction_map if item.get("beneficiary_type") == "direct"), None)
+        mapped_beneficiary = (direct_direction or {}).get("beneficiary_type") or "direct"
+        mapped_direction = (direct_direction or {}).get("direction") or "bullish"
         theme_bias = float((((learning_feedback or {}).get("theme_scores") or {}).get("attack", {}) or {}).get(theme or "", 0) or 0)
         if sector:
             sector_name = sector.get("name", theme or "无")
@@ -1478,6 +1891,8 @@ class BattleCommander:
                 reason_parts.append(
                     f"新闻共振{supporting_news.get('count', 1)}条：{supporting_news.get('latest_title', '')[:26]}"
                 )
+            if transmission:
+                reason_parts.append(f"传导链：{transmission[1] if len(transmission) > 1 else transmission[0]}")
             if theme_bias >= 1.5:
                 reason_parts.append("复盘纠偏偏正：近期兑现更稳")
             elif theme_bias <= -1.5:
@@ -1491,6 +1906,10 @@ class BattleCommander:
                 "verify_point": theme_info.get("verify", f"观察 {sector_name} 是否继续放量并带动前排强化"),
                 "fake_signal": theme_info.get("fake", f"{sector_name} 冲高回落且板块量能快速萎缩"),
                 "us_mapping": supporting_news.get("latest_title", "")[:40] if supporting_news else "",
+                "origin_event": event_driver,
+                "transmission": transmission,
+                "beneficiary_type": mapped_beneficiary,
+                "direction": mapped_direction,
             }
 
         if theme:
@@ -1508,6 +1927,10 @@ class BattleCommander:
                 "verify_point": theme_info.get("verify", f"观察 {theme} 是否出现前排强化"),
                 "fake_signal": theme_info.get("fake", f"{theme} 只停留在消息面，没有量能配合"),
                 "us_mapping": "",
+                "origin_event": event_driver,
+                "transmission": transmission,
+                "beneficiary_type": mapped_beneficiary,
+                "direction": mapped_direction,
             }
 
         return {
@@ -1517,9 +1940,19 @@ class BattleCommander:
             "verify_point": "观察热搜新闻是否向明确板块和个股传导",
             "fake_signal": "热点快速轮动且缺乏持续成交",
             "us_mapping": "",
+            "origin_event": event_driver,
+            "transmission": transmission,
+            "beneficiary_type": mapped_beneficiary,
+            "direction": mapped_direction,
         }
 
-    def _build_defense_logic(self, market_snapshot: Dict[str, Any], learning_feedback: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def _build_defense_logic(
+        self,
+        market_snapshot: Dict[str, Any],
+        learning_feedback: Optional[Dict[str, Any]] = None,
+        news_analysis: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        news_analysis = news_analysis or {}
         status = market_snapshot.get("status", "neutral")
         breadth = int(market_snapshot.get("breadth", 50) or 50)
         can_operate = bool(market_snapshot.get("canOperate", False))
@@ -1527,6 +1960,13 @@ class BattleCommander:
         capital_focus = capital_flow.get("focus", "")
         capital_net = float(capital_flow.get("net", 0) or 0)
         defense_scores = ((learning_feedback or {}).get("theme_scores") or {}).get("defense", {})
+        event_driver = news_analysis.get("event_driver") or news_analysis.get("lead_event") or "当前主事件"
+        transmission = list(news_analysis.get("transmission_chain") or [])
+        direction_map = news_analysis.get("direction_map") or []
+        defense_direction = next(
+            (item for item in direction_map if item.get("beneficiary_type") in {"defensive", "hedge", "second_order"}),
+            None,
+        )
 
         low_position_bias = float(defense_scores.get("低位补涨", 0) or 0)
         dividend_bias = float(defense_scores.get("高股息", 0) or 0)
@@ -1537,12 +1977,17 @@ class BattleCommander:
                 "name": "低位补涨",
                 "reason": (
                     "主线外资金可能轮动到低位大市值方向，适合作为防守兼补涨观察。"
+                    + (f" 事件链里更像{defense_direction.get('label', '二阶扩散')}承接。" if defense_direction else "")
                     + (" 近期复盘对该方向更友好。" if low_position_bias > 0 else "")
                 ),
                 "validity": "1-2 日",
                 "verify_point": theme_info["verify"],
                 "fake_signal": theme_info["fake"],
                 "us_mapping": "",
+                "origin_event": event_driver,
+                "transmission": transmission,
+                "beneficiary_type": (defense_direction or {}).get("beneficiary_type") or "second_order",
+                "direction": (defense_direction or {}).get("direction") or "bullish",
             }
 
         theme_info = THEME_LIBRARY["高股息"]
@@ -1551,12 +1996,17 @@ class BattleCommander:
             "reason": (
                 f"市场分歧期先看银行、电力、煤炭等低波动高股息方向。"
                 f"{f' 当前资金偏向 {capital_focus}，净流入{capital_net:+.1f}亿。' if capital_focus else ''}"
+                + (f" 事件链里它更像{defense_direction.get('label', '防守对冲')}。" if defense_direction else "")
                 + (" 近期复盘显示该方向容错更高。" if dividend_bias > 0 else "")
             ),
             "validity": "3-5 日",
             "verify_point": theme_info["verify"],
             "fake_signal": theme_info["fake"],
             "us_mapping": "",
+            "origin_event": event_driver,
+            "transmission": transmission,
+            "beneficiary_type": (defense_direction or {}).get("beneficiary_type") or "defensive",
+            "direction": (defense_direction or {}).get("direction") or "bullish",
         }
 
     def _generate_etf_section(self) -> Dict[str, Any]:
@@ -1575,6 +2025,7 @@ class BattleCommander:
         factor_engine: Optional[Dict[str, Any]] = None,
         market_snapshot: Optional[Dict[str, Any]] = None,
         learning_feedback: Optional[Dict[str, Any]] = None,
+        news_analysis: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """第五部分：⚡ 精锐股票池"""
         live_stocks = self._run_with_timeout(
@@ -1593,6 +2044,7 @@ class BattleCommander:
                 factor_engine=factor_engine,
                 market_snapshot=market_snapshot,
                 learning_feedback=learning_feedback,
+                news_analysis=news_analysis,
             ),
             "defense": self._build_theme_stock_pool(
                 mainlines.get("logic_b", {}).get("name", ""),
@@ -1602,6 +2054,7 @@ class BattleCommander:
                 factor_engine=factor_engine,
                 market_snapshot=market_snapshot,
                 learning_feedback=learning_feedback,
+                news_analysis=news_analysis,
             ),
         }
 
@@ -1614,7 +2067,32 @@ class BattleCommander:
         factor_engine: Optional[Dict[str, Any]] = None,
         market_snapshot: Optional[Dict[str, Any]] = None,
         learning_feedback: Optional[Dict[str, Any]] = None,
+        news_analysis: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
+        news_analysis = news_analysis or {}
+        direction_map = list(news_analysis.get("direction_map") or [])
+        event_driver = news_analysis.get("event_driver") or news_analysis.get("lead_event") or theme_name or "当前主事件"
+        falsifier = next(iter((trade_filter or {}).get("falsifiers") or news_analysis.get("falsifiers") or []), "")
+
+        preferred_types = ["direct", "second_order"] if bucket == "attack" else ["defensive", "hedge", "second_order"]
+        mapped_direction = next(
+            (
+                item for item in direction_map
+                if item.get("beneficiary_type") in preferred_types
+                and ((theme_name and item.get("label") == theme_name) or any(self._normalize_theme(theme) == self._normalize_theme(theme_name) for theme in (item.get("themes") or [])))
+            ),
+            None,
+        )
+        if not mapped_direction:
+            mapped_direction = next(
+                (item for item in direction_map if item.get("beneficiary_type") in preferred_types),
+                None,
+            )
+
+        beneficiary_type = (mapped_direction or {}).get("beneficiary_type") or ("direct" if bucket == "attack" else "defensive")
+        mapped_event = (mapped_direction or {}).get("label")
+        mapped_falsifier = falsifier or (mapped_direction or {}).get("rationale", "")
+
         theme_key = self._normalize_theme(theme_name)
         if not theme_key and bucket == "defense":
             theme_key = "高股息"
@@ -1696,6 +2174,9 @@ class BattleCommander:
                 "execution_note": execution_note,
                 "risk_note": risk_note,
                 "score": score,
+                "beneficiary_type": beneficiary_type,
+                "related_event": f"{event_driver} · {mapped_event}" if mapped_event and mapped_event != event_driver else event_driver,
+                "falsification": mapped_falsifier,
             })
 
         return results

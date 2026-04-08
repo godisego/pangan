@@ -1,11 +1,11 @@
 @import "tailwindcss";
 
 :root {
-  --bg-primary: #061018;
-  --bg-secondary: rgba(10, 21, 31, 0.84);
-  --bg-card: rgba(11, 25, 37, 0.88);
-  --bg-elevated: rgba(15, 30, 44, 0.96);
-  --bg-hover: rgba(19, 36, 52, 0.95);
+  --bg-primary: #020305;
+  --bg-secondary: rgba(6, 8, 12, 0.9);
+  --bg-card: rgba(10, 12, 18, 0.88);
+  --bg-elevated: rgba(12, 15, 22, 0.96);
+  --bg-hover: rgba(16, 20, 28, 0.95);
 
   --accent-green: #63f0c2;
   --accent-green-dim: rgba(99, 240, 194, 0.12);
@@ -60,10 +60,11 @@ body {
   min-height: 100vh;
   overflow-x: hidden;
   background:
-    radial-gradient(circle at 12% 18%, rgba(141, 220, 255, 0.12), transparent 24%),
-    radial-gradient(circle at 86% 8%, rgba(246, 199, 125, 0.16), transparent 26%),
-    radial-gradient(circle at 72% 68%, rgba(99, 240, 194, 0.1), transparent 28%),
-    linear-gradient(180deg, #09141d 0%, #07121a 28%, #050b11 100%);
+    radial-gradient(circle at 16% 14%, rgba(255, 255, 255, 0.08), transparent 18%),
+    radial-gradient(circle at 82% 10%, rgba(122, 92, 255, 0.14), transparent 24%),
+    radial-gradient(circle at 78% 72%, rgba(73, 167, 255, 0.1), transparent 26%),
+    radial-gradient(circle at 28% 88%, rgba(255, 255, 255, 0.05), transparent 22%),
+    linear-gradient(135deg, #06070a 0%, #010103 42%, #090b12 100%);
   color: var(--text-primary);
   font-family: "IBM Plex Sans", "Avenir Next", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
   -webkit-font-smoothing: antialiased;
@@ -81,21 +82,43 @@ body::after {
 
 body::before {
   background:
-    linear-gradient(rgba(255, 255, 255, 0.012) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.012) 1px, transparent 1px);
-  background-size: 80px 80px;
-  mask-image: linear-gradient(180deg, rgba(255, 255, 255, 0.2), transparent 88%);
+    radial-gradient(circle at 50% 0%, rgba(255, 255, 255, 0.08), transparent 42%),
+    linear-gradient(rgba(255, 255, 255, 0.015) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.015) 1px, transparent 1px);
+  background-size: auto, 80px 80px, 80px 80px;
+  mask-image: linear-gradient(180deg, rgba(255, 255, 255, 0.32), transparent 90%);
 }
 
 body::after {
   background:
-    radial-gradient(circle at 20% 22%, rgba(99, 240, 194, 0.04), transparent 20%),
-    radial-gradient(circle at 80% 18%, rgba(141, 220, 255, 0.06), transparent 22%);
+    radial-gradient(circle at 18% 22%, rgba(122, 92, 255, 0.12), transparent 18%),
+    radial-gradient(circle at 84% 18%, rgba(73, 167, 255, 0.12), transparent 22%),
+    radial-gradient(circle at 52% 86%, rgba(255, 255, 255, 0.04), transparent 22%);
   animation: ambientFloat 22s ease-in-out infinite;
 }
 
-a {
-  text-decoration: none;
+.app-shell {
+  position: relative;
+  background:
+    radial-gradient(circle at top, rgba(255, 255, 255, 0.04), transparent 30%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.01), rgba(255, 255, 255, 0));
+}
+
+.app-shell::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(circle at 14% 18%, rgba(255, 255, 255, 0.05), transparent 18%),
+    radial-gradient(circle at 82% 12%, rgba(122, 92, 255, 0.12), transparent 24%),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.02), transparent 38%);
+}
+
+.app-shell > * {
+  position: relative;
+  z-index: 1;
 }
 
 .card {
@@ -349,6 +372,31 @@ a {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
+.module-kpi-stack {
+  display: grid;
+  gap: 1rem;
+  align-content: start;
+}
+
+.module-kpi-grid--relaxed {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.module-kpi-card {
+  min-height: 168px;
+  padding: 1.2rem 1.2rem 1.1rem;
+}
+
+.module-kpi-card .module-node__title {
+  font-size: 1.14rem;
+  line-height: 1.35;
+}
+
+.module-kpi-card .module-node__copy {
+  font-size: 0.88rem;
+  line-height: 1.8;
+}
+
 .module-glance-grid {
   display: grid;
   gap: 0.85rem;
@@ -509,9 +557,10 @@ a {
   position: sticky;
   top: 0;
   z-index: 40;
-  border-bottom: 1px solid rgba(143, 177, 205, 0.12);
-  background: rgba(5, 14, 21, 0.82);
-  backdrop-filter: blur(18px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: linear-gradient(180deg, rgba(3, 3, 5, 0.88), rgba(8, 10, 14, 0.72));
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(20px);
 }
 
 .shell-brand {
@@ -559,7 +608,7 @@ a {
 }
 
 .shell-tab.active {
-  background: linear-gradient(135deg, rgba(141, 220, 255, 0.18), rgba(246, 199, 125, 0.08));
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.1), rgba(122, 92, 255, 0.18));
   color: var(--text-primary);
 }
 
@@ -567,6 +616,16 @@ a {
   display: grid;
   gap: 1.25rem;
   padding: 1.25rem 0 0.2rem;
+}
+
+.page-hero > div {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.015)),
+    rgba(10, 12, 18, 0.78) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 28px 80px rgba(0, 0, 0, 0.34);
+  backdrop-filter: blur(22px);
 }
 
 .section-shell {
@@ -1164,8 +1223,8 @@ a {
 
 .nav-mobile-link.active {
   color: var(--text-primary);
-  border-color: rgba(141, 220, 255, 0.2);
-  background: linear-gradient(135deg, rgba(141, 220, 255, 0.12), rgba(246, 199, 125, 0.08));
+  border-color: rgba(122, 92, 255, 0.28);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.08), rgba(122, 92, 255, 0.18));
 }
 
 .nav-action-hint {
@@ -1199,6 +1258,12 @@ a {
   letter-spacing: 0.18em;
   text-transform: uppercase;
   color: var(--text-muted);
+}
+
+@media (max-width: 1100px) {
+  .module-kpi-grid--relaxed {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 900px) {

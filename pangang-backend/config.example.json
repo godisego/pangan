@@ -1,0 +1,16 @@
+{
+  "channels": {
+    "feishu_webhook": "",
+    "wecom_webhook": "",
+    "telegram_bot_token": "",
+    "telegram_chat_id": "",
+    "telegram_api_base": "https://api.telegram.org",
+    "telegram_proxy_url": ""
+  },
+  "schedule": {
+    "enabled": false,
+    "daily_time": "08:00",
+    "timezone": "Asia/Shanghai",
+    "last_sent_date": ""
+  }
+}

@@ -26,6 +26,28 @@ export interface UserSettings {
 
 const STORAGE_KEY = 'pangang_user_settings_v1';
 
+function toPersistedSettings(settings: UserSettings): UserSettings {
+  return {
+    notifications: {
+      ...defaultSettings.notifications,
+      telegramApiBase: settings.notifications.telegramApiBase,
+    },
+    ai: {
+      provider: settings.ai.provider,
+      apiKey: '',
+      model: settings.ai.model,
+      baseUrl: settings.ai.baseUrl,
+    },
+    preferences: {
+      ...settings.preferences,
+    },
+  };
+}
+
+export function getPersistedSettingsSignature(settings: UserSettings): string {
+  return JSON.stringify(toPersistedSettings(settings));
+}
+
 export const defaultSettings: UserSettings = {
   notifications: {
     feishuWebhook: '',
@@ -65,11 +87,13 @@ export function loadUserSettings(): UserSettings {
     const merged = {
       notifications: {
         ...defaultSettings.notifications,
-        ...parsed.notifications
+        telegramApiBase: parsed.notifications?.telegramApiBase || defaultSettings.notifications.telegramApiBase,
       },
       ai: {
         ...defaultSettings.ai,
-        ...parsed.ai
+        provider: parsed.ai?.provider || defaultSettings.ai.provider,
+        model: parsed.ai?.model || defaultSettings.ai.model,
+        baseUrl: parsed.ai?.baseUrl || defaultSettings.ai.baseUrl,
       },
       preferences: {
         ...defaultSettings.preferences,
@@ -96,5 +120,5 @@ export function saveUserSettings(settings: UserSettings) {
     return;
   }
 
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
+  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(toPersistedSettings(settings)));
 }

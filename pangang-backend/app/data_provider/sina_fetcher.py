@@ -242,7 +242,7 @@ class SinaFetcher(BaseFetcher):
             resp.encoding = 'gbk'
             text = resp.text
 
-            match = re.search(r'var S_Finance_bankuai_sinaindustry\s*=\s*(\{.*\})', text, re.DOTALL)
+            match = re.search(r'var\s+S_Finance_bankuai_sinaindustry\s*=\s*(\{[\s\S]*?\})\s*;?', text)
             if not match:
                 raise ValueError("无法解析新浪JS数据")
 
@@ -252,24 +252,35 @@ class SinaFetcher(BaseFetcher):
 
             for _, values in items:
                 parts = values.split(',')
-                if len(parts) < 12: continue
-                
-                try:
-                    all_sectors.append({
-                        "name": parts[1],
-                        "change": float(parts[4]) if parts[4] else 0,
-                        "volume": float(parts[6]) if parts[6] else 0,
-                        "lead_name": parts[12] if len(parts) > 12 else "-",
-                        "lead_change": float(parts[10]) if len(parts) > 10 and parts[10] else 0
-                    })
-                except:
+                if len(parts) < 12:
                     continue
-            
+
+                try:
+                    change = self._to_float(parts[4], default=0.0)
+                    volume = self._to_float(parts[6], default=0.0)
+                    lead_name = parts[12].strip() if len(parts) > 12 and parts[12] else "-"
+                    lead_change = self._to_float(parts[10], default=0.0)
+
+                    if abs(change) > 20:
+                        continue
+                    if abs(lead_change) > 35:
+                        lead_change = 0.0
+
+                    all_sectors.append({
+                        "name": parts[1].strip(),
+                        "change": change,
+                        "volume": volume,
+                        "lead_name": lead_name or "-",
+                        "lead_change": lead_change,
+                    })
+                except Exception:
+                    continue
+
             # 按涨幅排序
             all_sectors.sort(key=lambda x: x['change'], reverse=True)
-            
+
             result_list = []
-            for idx, sector in enumerate(all_sectors[:20]):
+            for sector in all_sectors[:20]:
                 lead_change = float(sector['lead_change']) if sector['lead_change'] is not None else 0.0
                 if sector['change'] >= 3.0 and lead_change >= 7.0:
                     catalyst_level = 'strong'
@@ -281,7 +292,7 @@ class SinaFetcher(BaseFetcher):
                     catalyst_level = 'none'
 
                 is_synergy = catalyst_level in ('strong', 'medium')
-                
+
                 result_list.append({
                     "id": sector['name'],
                     "name": sector['name'],
@@ -290,11 +301,10 @@ class SinaFetcher(BaseFetcher):
                     "turnover": None,
                     "topStock": sector['lead_name'],
                     "leadChange": round(lead_change, 2),
-                    "isVolumePriceSynergy": is_synergy
-                    ,
+                    "isVolumePriceSynergy": is_synergy,
                     "catalystLevel": catalyst_level,
                 })
-                
+
             return result_list
         except Exception as e:
             logger.error(f"Sina hot sectors error: {e}")

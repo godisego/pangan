@@ -140,6 +140,7 @@ TELEGRAM_PROXY_URL=
 
 - 不提交真实 `.env`
 - 不提交真实 `config.json`
+- 提供 `pangang-backend/config.example.json` 作为本地通知配置模板
 - 不提交本地数据缓存
 - `TUSHARE_TOKEN` 作为可选增强项，而不是硬依赖
 
@@ -163,6 +164,7 @@ TELEGRAM_PROXY_URL=
 - `.github/workflows/daily-report.yml`
 - `pangang/.env.example`
 - `pangang-backend/.env.example`
+- `pangang-backend/config.example.json`
 
 ### 第 2 步：部署后端到 Render
 

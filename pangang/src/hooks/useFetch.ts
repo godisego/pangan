@@ -4,6 +4,8 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 
+const pendingRequests = new Map<string, Promise<unknown>>();
+
 export interface UseFetchOptions<T> {
   interval?: number;
   enabled?: boolean;
@@ -111,7 +113,20 @@ export function useFetch<T>(
         setLoading(true);
       }
 
-      const result = await fetchFnRef.current();
+      const requestKey = cacheKey || null;
+      const requestPromise = requestKey
+        ? (pendingRequests.get(requestKey) as Promise<T> | undefined) || (() => {
+            const promise = fetchFnRef.current();
+            pendingRequests.set(requestKey, promise);
+            promise.finally(() => {
+              if (pendingRequests.get(requestKey) === promise) {
+                pendingRequests.delete(requestKey);
+              }
+            });
+            return promise;
+          })()
+        : fetchFnRef.current();
+      const result = await requestPromise;
 
       if (isMounted.current) {
         let shouldUpdate = true;

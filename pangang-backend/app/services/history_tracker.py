@@ -221,18 +221,36 @@ class HistoryTracker:
             current += timedelta(days=1)
         return current
 
+    def _extract_hist_change(self, df: Any) -> Optional[float]:
+        if df is None or getattr(df, "empty", True):
+            return None
+        latest = df.iloc[-1]
+        for key in ("涨跌幅", "涨跌幅(%)"):
+            value = latest.get(key)
+            if value is not None:
+                return round(float(value), 2)
+        return None
+
+    def _has_history_verification_provider(self) -> bool:
+        for module_name in ("akshare", "efinance"):
+            try:
+                __import__(module_name)
+                return True
+            except Exception:
+                continue
+        return False
+
     def _fetch_stock_change_for_date(self, code: str, verify_date: str) -> Optional[float]:
+        cache_key = f"{code}_{verify_date.replace('-', '')}"
+        cached = frame_cache.load_frame("verify_hist", cache_key)
+        cached_change = self._extract_hist_change(cached)
+        if cached_change is not None:
+            return cached_change
+
+        errors: List[str] = []
+
         try:
             import akshare as ak
-
-            cache_key = f"{code}_{verify_date.replace('-', '')}"
-            cached = frame_cache.load_frame("verify_hist", cache_key)
-            if cached is not None and not cached.empty:
-                latest = cached.iloc[-1]
-                for key in ("涨跌幅", "涨跌幅(%)"):
-                    value = latest.get(key)
-                    if value is not None:
-                        return round(float(value), 2)
 
             with _without_proxy_env():
                 df = ak.stock_zh_a_hist(
@@ -242,20 +260,37 @@ class HistoryTracker:
                     end_date=verify_date.replace("-", ""),
                     adjust="qfq",
                 )
-            if df is None or df.empty:
-                return None
-
-            frame_cache.save_frame("verify_hist", cache_key, df)
-
-            latest = df.iloc[-1]
-            for key in ("涨跌幅", "涨跌幅(%)"):
-                value = latest.get(key)
-                if value is not None:
-                    return round(float(value), 2)
-            return None
+            change = self._extract_hist_change(df)
+            if change is not None:
+                frame_cache.save_frame("verify_hist", cache_key, df)
+                return change
+            errors.append("akshare returned empty history")
         except Exception as e:
-            logger.error(f"Fetch historical verification change error for {code} on {verify_date}: {e}")
-            return None
+            errors.append(f"akshare: {e}")
+
+        try:
+            import efinance as ef
+
+            with _without_proxy_env():
+                df = ef.stock.get_quote_history(
+                    code,
+                    beg=verify_date.replace("-", ""),
+                    end=verify_date.replace("-", ""),
+                    klt=101,
+                    fqt=1,
+                )
+            change = self._extract_hist_change(df)
+            if change is not None:
+                frame_cache.save_frame("verify_hist", cache_key, df)
+                return change
+            errors.append("efinance returned empty history")
+        except Exception as e:
+            errors.append(f"efinance: {e}")
+
+        logger.error(
+            f"Fetch historical verification change error for {code} on {verify_date}: {' | '.join(errors) or 'no provider available'}"
+        )
+        return None
 
     def _fetch_stock_changes_batch_for_date(self, codes: List[str], verify_date: str) -> Dict[str, float]:
         normalized_codes = [code for code in sorted(set(codes)) if code]
@@ -516,6 +551,15 @@ class HistoryTracker:
                 record["verified"] = False
                 record["verify_result"] = None
                 self._save_history()
+                if not self._has_history_verification_provider():
+                    self._mark_verification_waiting(
+                        yesterday_date,
+                        status="failed",
+                        message="历史验证依赖未安装，当前环境缺少 akshare / efinance，无法补全次日涨跌幅。",
+                        retry_at=datetime.now() + self._retry_wait_failed,
+                        error="missing verification providers: akshare, efinance",
+                    )
+                    return None
                 self._mark_verification_waiting(
                     yesterday_date,
                     status="pending_data",

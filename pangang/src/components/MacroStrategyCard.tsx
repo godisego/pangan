@@ -117,7 +117,7 @@ export default function MacroStrategyDashboard({ className = '' }: { className?:
     return (
       <div className={`grid gap-4 ${className}`}>
         <div className="module-node">
-          <div className="module-node__label">Engine</div>
+          <div className="module-node__label">分析方式</div>
           <div className="module-node__title">{loading ? '正在生成宏观解释...' : '宏观解释暂时不可用'}</div>
           <div className="module-node__copy">
             {error || `当前引擎：${engineLabel}。正在等待新闻、周期和长短线建议返回。`}
@@ -131,7 +131,7 @@ export default function MacroStrategyDashboard({ className = '' }: { className?:
     <div className={`grid gap-4 ${className}`}>
       <div className="module-columns xl:grid-cols-[1.08fr_0.92fr]">
         <div className="module-node">
-          <div className="module-node__label">Step 1 · 新闻模块</div>
+          <div className="module-node__label">第一步 · 今日新闻</div>
           <div className="module-node__title">先看今天最值得纳入判断的新闻</div>
           <div className="mt-4 scan-list">
             {(macroData.news_brief || []).map((item) => (
@@ -141,7 +141,7 @@ export default function MacroStrategyDashboard({ className = '' }: { className?:
         </div>
 
         <div className="module-node">
-          <div className="module-node__label">Step 2 · 周期框架</div>
+          <div className="module-node__label">第二步 · 周期框架</div>
           <div className="module-node__title">再把新闻放进长期、中期、短线三层框架</div>
           <div className="mt-4 grid gap-3">
             <CycleCard
@@ -164,7 +164,7 @@ export default function MacroStrategyDashboard({ className = '' }: { className?:
       </div>
 
       <div className="module-node">
-        <div className="module-node__label">Step 3 · 解释结论</div>
+        <div className="module-node__label">第三步 · 解释结论</div>
         <div className="module-node__title">今天这条主线为什么能站得住</div>
         <div className="module-node__copy">
           {macroData.cycle_framework?.summary || macroData.macro_mainline?.narrative || '当前还没有主线解释。'}
@@ -173,7 +173,7 @@ export default function MacroStrategyDashboard({ className = '' }: { className?:
 
       <div className="module-columns xl:grid-cols-2">
         <div className="module-node">
-          <div className="module-node__label">Step 4 · 长线建议</div>
+          <div className="module-node__label">第四步 · 长线建议</div>
           <div className="module-node__title">{macroData.long_term_view?.stance || '长线暂未给出'}</div>
           <div className="mt-4">
             <ThemeStrip themes={macroData.long_term_view?.themes || []} />
@@ -184,7 +184,7 @@ export default function MacroStrategyDashboard({ className = '' }: { className?:
         </div>
 
         <div className="module-node">
-          <div className="module-node__label">Step 5 · 短线建议</div>
+          <div className="module-node__label">第五步 · 短线建议</div>
           <div className="module-node__title">{macroData.short_term_view?.stance || '短线暂未给出'}</div>
           <div className="mt-4">
             <ThemeStrip themes={macroData.short_term_view?.focus || []} />
